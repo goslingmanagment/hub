@@ -515,22 +515,65 @@ export async function findAgentHydrationRequestByRef(
   return { request: row ? mapRequest(row) : null, witnesses: [] };
 }
 
+export interface AgentHydrationListBoundary {
+  createdAtUtc: string;
+  id: number;
+}
+
+export async function readAgentHydrationRequestHighWater(db: Database): Promise<number> {
+  const result = await db.execute<{ max_id: string }>(sql`
+    select coalesce(max(id), 0)::text as max_id
+    from agent_hydration_requests
+  `);
+  return Number(result.rows[0]?.max_id ?? 0);
+}
+
 export async function listAgentHydrationRequests(
   db: Database,
-  input: { states?: readonly AgentHydrationState[]; limit: number },
-): Promise<{ rows: AgentHydrationRequestRecord[]; witnesses: PlaneReadWitness[] }> {
+  input: {
+    states?: readonly AgentHydrationState[];
+    limit: number;
+    maxId?: number;
+    after?: AgentHydrationListBoundary;
+  },
+): Promise<{
+  rows: AgentHydrationRequestRecord[];
+  hasMore: boolean;
+  nextBoundary: AgentHydrationListBoundary | null;
+  witnesses: PlaneReadWitness[];
+}> {
   const states = input.states ?? [];
   const stateFilter = states.length > 0
     ? sql`and r.state = any(${sql.param([...states])}::text[])`
     : sql``;
+  const maxIdFilter = input.maxId !== undefined
+    ? sql`and r.id <= ${input.maxId}`
+    : sql``;
+  const afterFilter = input.after !== undefined
+    ? sql`and (r.created_at, r.id) < ((${input.after.createdAtUtc} || '+00')::timestamptz, ${input.after.id}::bigint)`
+    : sql``;
   const result = await db.execute<Record<string, unknown>>(sql`
-    select ${REQUEST_COLUMNS} ${REQUEST_FROM}
-    where true ${stateFilter}
+    select ${REQUEST_COLUMNS},
+           to_char(r.created_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') as cursor_created_at_utc
+    ${REQUEST_FROM}
+    where true ${stateFilter} ${maxIdFilter} ${afterFilter}
     order by r.created_at desc, r.id desc
-    limit ${input.limit}
+    limit ${input.limit + 1}
   `);
+  const hasMore = result.rows.length > input.limit;
+  const pageRaw = hasMore ? result.rows.slice(0, input.limit) : result.rows;
+  const rows = pageRaw.map(mapRequest);
+  const lastRaw = pageRaw.at(-1);
+  const lastMapped = rows.at(-1);
+  const nextBoundary: AgentHydrationListBoundary | null =
+    hasMore && lastRaw !== undefined && lastMapped !== undefined
+      ? {
+        createdAtUtc: String(lastRaw.cursor_created_at_utc),
+        id: lastMapped.id,
+      }
+      : null;
   // No witness: this reads the request table, not the thread inventory.
-  return { rows: result.rows.map(mapRequest), witnesses: [] };
+  return { rows, hasMore, nextBoundary, witnesses: [] };
 }
 
 export type AgentHydrationCasOutcome = "applied" | "conflict" | "coverage_stale";
@@ -940,16 +983,20 @@ export async function settleAgentHydrationRequest(
  */
 export async function listStuckAgentHydrationDispatches(
   db: Database,
-  input: { limit: number; now?: Date },
+  input: { limit: number; now?: Date; excludeIds?: readonly number[] },
 ): Promise<AgentHydrationRequestRecord[]> {
   const now = input.now ?? new Date();
+  const excluded = input.excludeIds && input.excludeIds.length > 0
+    ? sql`and not (r.id = any(${sql.param([...input.excludeIds])}::bigint[]))`
+    : sql``;
   const result = await db.execute<Record<string, unknown>>(sql`
     select ${REQUEST_COLUMNS} ${REQUEST_FROM}
     where r.state = 'dispatching'
       and r.dispatch_deadline_at is not null
       and r.dispatch_deadline_at <= ${now}
       and ${LEGACY_SWEEPABLE}
-    order by r.dispatch_deadline_at asc
+      ${excluded}
+    order by r.dispatch_deadline_at asc, r.id asc
     limit ${input.limit}
   `);
   return result.rows.map(mapRequest);
@@ -957,16 +1004,31 @@ export async function listStuckAgentHydrationDispatches(
 
 /** Everything currently in flight, deadline or not — the reconciliation input
  *  for lanes whose executor cannot report back on its own (OnlyFans). Rows the
- *  Fansly Sync Engine serves are not in flight on any legacy lane. */
+ *  Fansly Sync Engine serves are not in flight on any legacy lane.
+ *
+ *  BL-C2: terminal capture jobs sort ahead of live jobs (`ready`, `leased`,
+ *  `awaiting_parse`, `retry_wait`) and `excludeIds` lets the sweeper paginate
+ *  across batches, so older non-terminal requests can never starve later
+ *  finished work. */
 export async function listDispatchingAgentHydrationRequests(
   db: Database,
-  input: { limit: number },
+  input: { limit: number; excludeIds?: readonly number[] },
 ): Promise<AgentHydrationRequestRecord[]> {
+  const excluded = input.excludeIds && input.excludeIds.length > 0
+    ? sql`and not (r.id = any(${sql.param([...input.excludeIds])}::bigint[]))`
+    : sql``;
   const result = await db.execute<Record<string, unknown>>(sql`
     select ${REQUEST_COLUMNS} ${REQUEST_FROM}
+    left join ofapi_capture_jobs j
+      on p.platform = 'onlyfans'
+     and r.execution_ref ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+     and j.id = r.execution_ref::uuid
     where r.state = 'dispatching'
       and ${LEGACY_SWEEPABLE}
-    order by r.dispatched_at asc
+      ${excluded}
+    order by case when j.state in ('complete', 'blocked', 'cancelled') then 0 else 1 end asc,
+             r.dispatched_at asc nulls last,
+             r.id asc
     limit ${input.limit}
   `);
   return result.rows.map(mapRequest);
@@ -976,16 +1038,20 @@ export async function listDispatchingAgentHydrationRequests(
  *  (never a row the Fansly Sync Engine serves). */
 export async function listExpirableAgentHydrationRequests(
   db: Database,
-  input: { limit: number; now?: Date },
+  input: { limit: number; now?: Date; excludeIds?: readonly number[] },
 ): Promise<AgentHydrationRequestRecord[]> {
   const now = input.now ?? new Date();
+  const excluded = input.excludeIds && input.excludeIds.length > 0
+    ? sql`and not (r.id = any(${sql.param([...input.excludeIds])}::bigint[]))`
+    : sql``;
   const result = await db.execute<Record<string, unknown>>(sql`
     select ${REQUEST_COLUMNS} ${REQUEST_FROM}
     where r.state in ('requested', 'approved')
       and r.expires_at is not null
       and r.expires_at <= ${now}
       and ${LEGACY_SWEEPABLE}
-    order by r.expires_at asc
+      ${excluded}
+    order by r.expires_at asc, r.id asc
     limit ${input.limit}
   `);
   return result.rows.map(mapRequest);

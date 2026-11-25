@@ -2162,6 +2162,7 @@ export const agentHydrationRequestDecideResponseSchema = z.object({
 export const agentHydrationRequestListQuerySchema = z.object({
   state: agentHydrationStateEnum.optional(),
   limit: paginationQuerySchema.shape.limit,
+  cursor: agentCursorString.optional(),
 }).strict();
 
 export const agentHydrationRequestListResponseSchema = z.object({

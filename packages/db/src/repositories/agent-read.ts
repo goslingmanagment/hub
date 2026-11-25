@@ -274,8 +274,9 @@ export interface AgentJournalFloorScope {
  *
  * A window earlier than the journal floor is EMPTY BY CONSTRUCTION, and saying so
  * is the difference between "no such fact" and "no journal for that month". The
- * name pattern is anchored so that a helper table like
- * `domain_events_smoke_checkpoint` cannot masquerade as a detached month.
+ * name pattern is anchored (`YYYY_MM`) so no non-partition helper table can
+ * masquerade as a detached month (`domain_events_smoke_checkpoint` was dropped
+ * in migration `0450`).
  */
 export async function readAgentJournalFloor(
   db: Database,
@@ -2011,6 +2012,10 @@ export async function listAgentObservations(
   if (input.pageIds.length === 0) {
     return { rows: [], witnesses: [] };
   }
+  if (input.after !== undefined && input.after.sortValue === null) {
+    // `observations.received_at` is NOT NULL, so no rows lie past a NULL sort boundary.
+    return { rows: [], witnesses: witnessesFor(["observations"], input.journalFloor) };
+  }
   const clauses: SQL[] = [
     // A journal row with NO account is deployment-wide (a webhook before page
     // resolution); it stays invisible to a scoped key rather than leaking.
@@ -2022,7 +2027,11 @@ export async function listAgentObservations(
     clauses.push(sql`o.platform = ${input.platform}`);
   }
   if (input.pageLabel !== undefined) {
-    clauses.push(sql`p.label = ${input.pageLabel}`);
+    clauses.push(sql`exists (
+      select 1 from pages pf
+      where pf.id = o.account_id
+        and pf.label = ${input.pageLabel}
+    )`);
   }
   if (input.source !== undefined) {
     clauses.push(sql`o.source = ${input.source}`);
@@ -2039,43 +2048,57 @@ export async function listAgentObservations(
   if (input.maxObservationId !== undefined) {
     clauses.push(sql`o.id <= ${input.maxObservationId}`);
   }
+  // BL-A13: apply keyset and ordering natively on `(o.received_at, o.id)` BEFORE
+  // joining `capture_payload_objects` or detoasting `o.payload::text`, so Postgres
+  // can satisfy the range + sort from `observations_account_received_idx` and only
+  // compute `octet_length(o.payload::text)` for the chosen `limit` rows.
+  if (input.after !== undefined && input.after.sortValue !== null) {
+    const afterAt = sql`(${input.after.sortValue} || '+00')::timestamptz`;
+    const afterId = sql`((${input.after.key})::numeric - 1000000000000000000000)::bigint`;
+    if (input.sortDir === "desc") {
+      clauses.push(sql`o.received_at <= ${afterAt}`);
+      clauses.push(sql`(o.received_at, o.id) < (${afterAt}, ${afterId})`);
+    } else {
+      clauses.push(sql`o.received_at >= ${afterAt}`);
+      clauses.push(sql`(o.received_at, o.id) > (${afterAt}, ${afterId})`);
+    }
+  }
+
+  const orderByPicked = input.sortDir === "desc"
+    ? sql`order by o.received_at desc, o.id desc`
+    : sql`order by o.received_at asc, o.id asc`;
+  const orderByOuter = input.sortDir === "desc"
+    ? sql`order by picked.received_at desc, picked.id desc`
+    : sql`order by picked.received_at asc, picked.id asc`;
 
   const result = await db.execute<Record<string, unknown>>(sql`
-    with keyed as (
-      select o.id::text as id, o.received_at, o.observed_at, o.source, o.producer,
-             o.platform, p.label, o.native_account_ref, o.kind,
-             -- G5 slice 3a (§6.4): the honest size of a body that lives in the
-             -- content-addressed catalog is the catalog's own logical_bytes —
-             -- the octet count of the canonical bytes the digest was taken over.
-             -- It is a JOIN and not a fifth typed column because the number is
-             -- ALREADY stored, once, on the row this reference addresses:
-             -- duplicating it onto every observation would pay heap for a value
-             -- the catalog PK hands over on an index probe, and would only ever
-             -- be right for rows written after this slice, while the join is
-             -- right for every reference slice 1 has already written.
-             -- The number does shift for a referenced row (canonical octets vs
-             -- jsonb's own text rendering, which pads its separators with a
-             -- space); that is the correction, not a regression — a size on a
-             -- column the system is about to stop writing is the one that would
-             -- silently become a lie.
-             -- CAS-INLINE-FALLBACK: the octet_length arm serves rows with no
-             -- catalog reference; it goes when every row carries one.
-             coalesce(cpo.logical_bytes, octet_length(o.payload::text)) as payload_bytes,
-             encode(o.payload_hash, 'hex') as payload_sha256,
-             o.parse_version,
-             ${renderInstant(sql`o.received_at`)} as k_sort,
-             ${renderNumeric(sql`o.id`)} as k_key
+    with picked as (
+      select o.id, o.account_id, o.received_at, o.observed_at, o.source, o.producer,
+             o.platform, o.native_account_ref, o.kind, o.payload_hash, o.parse_version,
+             o.payload_bucket_month, o.payload_object_id, o.payload
       from observations o
-      left join pages p on p.id = o.account_id
-      left join capture_payload_objects cpo
-        on cpo.bucket_month = o.payload_bucket_month
-       and cpo.object_id = o.payload_object_id
       where ${sql.join(clauses, sql` and `)}
+      ${orderByPicked}
+      limit ${input.limit}
     )
-    select * from keyed
-    where ${keysetPredicate(input.sortDir, input.after)}
-    ${keysetOrderBy(input.sortDir)}
-    limit ${input.limit}
+    select picked.id::text as id, picked.received_at, picked.observed_at, picked.source,
+           picked.producer, picked.platform, p.label, picked.native_account_ref, picked.kind,
+           -- G5 slice 3a (§6.4): the honest size of a body that lives in the
+           -- content-addressed catalog is the catalog's own logical_bytes —
+           -- the octet count of the canonical bytes the digest was taken over.
+           -- CAS-INLINE-FALLBACK: the octet_length arm serves rows with no
+           -- catalog reference and runs only for the final limited page.
+           coalesce(cpo.logical_bytes, octet_length(picked.payload::text)) as payload_bytes,
+           encode(picked.payload_hash, 'hex') as payload_sha256,
+           picked.parse_version,
+           ${renderInstant(sql`picked.received_at`)} as k_sort,
+           ${renderNumeric(sql`picked.id`)} as k_key
+    from picked
+    left join pages p on p.id = picked.account_id
+    left join capture_payload_objects cpo
+      on cpo.bucket_month = picked.payload_bucket_month
+     and cpo.object_id = picked.payload_object_id
+    ${orderByOuter}
   `);
 
   return {

@@ -1,10 +1,10 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { assertRuntimeSchemaReady } from "@agency_hub_core/db";
+import { assertRuntimeSchemaReady, PROJECTION_ONLY_DOMAIN_EVENT_TYPES } from "@agency_hub_core/db";
 
 import { resolveMigrationFiles } from "../packages/db/src/migrations-dir.ts";
 import { startTestDatabase } from "./helpers/db.ts";
@@ -254,4 +254,21 @@ describe("runtime schema guard", () => {
       await testDb.stop();
     }
   }, 30_000);
+
+  it("keeps migration 0104 deliverable index exclusions a strict subset of PROJECTION_ONLY_DOMAIN_EVENT_TYPES (BL-D-1)", async () => {
+    const migrationSql = await readFile(
+      path.resolve(process.cwd(), "packages/db/migrations/0104_ofapi_existing_table_indexes_concurrently.sql"),
+      "utf8",
+    );
+    const match = migrationSql.match(/where type not in\s*\(([\s\S]*?)\)/);
+    expect(match).not.toBeNull();
+    const excludedTypes = [...(match?.[1] ?? "").matchAll(/'([^']+)'/g)].map((m) => m[1]!);
+    expect(excludedTypes.length).toBeGreaterThan(0);
+    for (const eventType of excludedTypes) {
+      expect(
+        PROJECTION_ONLY_DOMAIN_EVENT_TYPES.has(eventType),
+        `0104 excludes "${eventType}" which must remain in PROJECTION_ONLY_DOMAIN_EVENT_TYPES`,
+      ).toBe(true);
+    }
+  });
 });

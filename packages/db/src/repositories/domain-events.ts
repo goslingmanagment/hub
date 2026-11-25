@@ -72,7 +72,7 @@ export class ProjectionCheckpointClaimedError extends Error {
   }
 }
 
-const PROJECTION_ONLY_DOMAIN_EVENT_TYPES = new Set([
+export const PROJECTION_ONLY_DOMAIN_EVENT_TYPES: ReadonlySet<string> = new Set([
   "fansly.ws_signal_observed",
   "ofapi.post_like_observed",
   "ofapi.chat_queue_observed",
