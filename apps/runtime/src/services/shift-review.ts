@@ -615,7 +615,8 @@ export interface ClampedColleagueSpan {
  * Per-page watch windows `[shift.startedAt, watchTo]` for one shift. A page's `watchTo` is cut before `end` ONLY when:
  * 1) the work is a shift and the chatter has scheduled slot occurrence(s) on that page overlapping `[start, end)` whose
  *    latest end `slotEnd` is strictly before `end`, AND
- * 2) an incoming colleague's shift holds that page after `slotEnd` (`endedAt > slotEnd` and `salesSince <= slotEnd + 90 min`).
+ * 2) an incoming colleague's shift holds that page after `slotEnd` (`salesSince <= slotEnd + 90 min`) and keeps it to
+ *    this shift's end (`endedAt >= end - 15 min`): one who left earlier left the page to this chatter again.
  * Handover time is clamped to at most 15 min past `slotEnd` so a colleague's long lateness is not dumped on the
  * outgoing chatter; when no successor shows up on that page, `watchTo` stays `end`. Pure.
  */
@@ -647,7 +648,7 @@ export function pageWatchesOf(input: {
       if (colleague.work.kind !== "shift") continue;
       const since = colleague.work.salesSince.get(page.label);
       if (since === undefined) continue;
-      if (colleague.work.endedAt <= slotEnd || since > slotEnd + successorWindow || since >= end) continue;
+      if (colleague.work.endedAt <= slotEnd || colleague.work.endedAt < end - softJoin || since > slotEnd + successorWindow || since >= end) continue;
       if (since < earliestSince) earliestSince = since;
     }
     if (!Number.isFinite(earliestSince)) {
@@ -1118,7 +1119,7 @@ export async function computeShiftReview(
   const pausePolicy = shift.kind === "shift"
     ? classifyShiftBreaks(
       shiftSendBreaksOf({
-        sendMinutes: (person.sent ?? []).map((one) => one.at),
+        activeMinutes: [...(person.inputMinutes ?? []), ...(person.sent ?? []).map((one) => one.at)],
         shiftStart: start,
         shiftEnd: end,
         slotStart,

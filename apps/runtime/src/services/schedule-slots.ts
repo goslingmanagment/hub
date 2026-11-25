@@ -171,12 +171,15 @@ export function slotOccurrencesOf(
     ? [...new Set([...pagesOfAll, ...standing.flatMap((slot) => (slot.pageId === null ? [] : [slot.pageId]))])]
     : null;
   const specificPages = [...new Set(standing.flatMap((slot) => (slot.pageId === null ? [] : [slot.pageId])))];
+  const ofAll = new Set(pagesOfAll ?? []);
   const out: SlotOccurrence[] = [];
 
   for (const { day, midnight, weekday } of days) {
     if (standingPages !== null) {
       for (const pageId of standingPages) {
         for (const slot of standingLinesOn(standing, pageId, day)) {
+          // A line of every page stands only for the working pages; another page runs its own lines alone.
+          if (slot.pageId !== pageId && !ofAll.has(pageId)) continue;
           const run = slotRunOf(slot, midnight, weekday);
           if (run === null) continue;
           const pieces = withoutHours(run, offs.filter((off) => off.pageId === pageId));

@@ -485,6 +485,8 @@ export interface PersonWork {
   work: ComputedWork[];
   /** Authored send minutes across all of the person's pages (reused by shift pause policy with zero extra SQL). */
   sent?: readonly SentMinute[];
+  /** Minutes with a click (input) across all of the person's pages, for the shift pause policy. */
+  inputMinutes?: readonly number[];
 }
 
 /**
@@ -549,7 +551,8 @@ export async function readPeopleWork(
     const cut = scope === null ? all : all.flatMap((one) => workOnPages(one, labels) ?? []);
     // The owner is not a chatter: their work stays work, but holds no sale (owner, 2026-11-12).
     const work = owners.has(userId) ? cut.map((one) => ({ ...one, salesSince: new Map<string, number>() })) : cut;
-    if (work.length > 0) out.set(userId, { username: known.username, pageIds: known.pageIds, work, sent: known.sent });
+    const inputMinutes = known.minutes.flatMap((minute) => (minute.input ? [minute.at] : []));
+    if (work.length > 0) out.set(userId, { username: known.username, pageIds: known.pageIds, work, sent: known.sent, inputMinutes });
   }
   return out;
 }

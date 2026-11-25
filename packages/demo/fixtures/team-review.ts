@@ -493,9 +493,12 @@ function inventedReviewOf(shift: DemoShift, now: number): Response {
 
   const others = teamWorld(new Date(now)).shifts.filter((one) => one.user.id === shift.user.id).sort((a, b) => a.startedAt - b.startedAt);
   const position = others.findIndex((one) => one.startedAt === shift.startedAt);
-  const sendMinutes = chats.flatMap((chat) => chat.messages.flatMap((message) => (message.inShift && message.by === "me" ? [Date.parse(message.at)] : [])));
+  const activeMinutes = [
+    ...activity.flatMap((one) => (one.input ? [Date.parse(one.at)] : [])),
+    ...chats.flatMap((chat) => chat.messages.flatMap((message) => (message.inShift && message.by === "me" ? [Date.parse(message.at)] : []))),
+  ];
   const pausePolicy = classifyShiftBreaks(
-    shiftSendBreaksOf({ sendMinutes, shiftStart: start, shiftEnd: end }),
+    shiftSendBreaksOf({ activeMinutes, shiftStart: start, shiftEnd: end }),
     { ongoing: shift.ongoing },
   );
   return {

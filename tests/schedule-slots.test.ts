@@ -67,6 +67,11 @@ describe("slotOccurrencesOf", () => {
     expect(runs(mondayOnly, msk("2026-11-17", "00:00"), msk("2026-11-17", "23:00"), [11, 12])).toEqual([
       [msk("2026-11-17", "08:00"), msk("2026-11-17", "16:00"), 11],
     ]);
+    // A page with its own line that is not a working page: once its line ends, the every-page line does not run there.
+    const ended = [line(), line({ pageId: 99, startMinute: 16 * 60, endMinute: 20 * 60, validTo: "2026-11-10" })];
+    expect(runs(ended, msk("2026-11-17", "00:00"), msk("2026-11-17", "23:00"), [11])).toEqual([
+      [msk("2026-11-17", "08:00"), msk("2026-11-17", "16:00"), 11],
+    ]);
   });
 
   it("takes a swap's «off» hours out of its page that day only, and runs a «cover» line of its own, whatever is off", () => {

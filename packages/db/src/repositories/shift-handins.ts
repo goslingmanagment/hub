@@ -1179,7 +1179,9 @@ export async function findSalesForReportClaim(
     const fan = (input.fan ?? "").trim().replace(/^@+/u, "");
     if (fan === "" || input.amountMills === undefined) return [];
     const fanWithoutTrailingSlash = fan.replace(/\/+$/u, "");
-    const aliasTrimmedMatch = fanWithoutTrailingSlash === ""
+    // A note is matched only by a word with a letter or a digit: «+» or «+✅» is a mark thousands of fans share.
+    const aliasMeaningful = /[\p{L}\p{N}]/u.test(fan);
+    const aliasTrimmedMatch = fanWithoutTrailingSlash === "" || !aliasMeaningful
       ? sql`false`
       : sql`(nullif(rtrim(btrim(pf.page_alias), '/'), '') is not null
           and lower(rtrim(btrim(pf.page_alias), '/')) = lower(${fanWithoutTrailingSlash}))`;
@@ -1187,9 +1189,9 @@ export async function findSalesForReportClaim(
       or lower(coalesce(btrim(f.display_name), '')) = lower(${fan})
       or f.platform_user_id = ${fan}
       or ('u' || f.platform_user_id) = ${fan}
-      or lower(coalesce(btrim(pf.page_alias), '')) = lower(${fan})
+      or ${aliasMeaningful ? sql`lower(coalesce(btrim(pf.page_alias), '')) = lower(${fan})` : sql`false`}
       or ${aliasTrimmedMatch}
-      or (position('/' in coalesce(pf.page_alias, '')) > 0
+      or (${aliasMeaningful ? sql`true` : sql`false`} and position('/' in coalesce(pf.page_alias, '')) > 0
         and length(btrim(split_part(btrim(pf.page_alias), '/', 1))) >= 2
         and lower(btrim(split_part(btrim(pf.page_alias), '/', 1))) = lower(${fan})))
       and (t.creator_net_amount_mills = ${input.amountMills} or t.gross_amount_mills = ${input.amountMills})`;
