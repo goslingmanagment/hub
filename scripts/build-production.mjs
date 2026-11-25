@@ -99,6 +99,38 @@ async function buildPackage(packageDir, entryPoints, options = {}) {
   }
 }
 
+async function verifyContractsFresh() {
+  try {
+    const { stdout, stderr } = await execFileAsync(process.execPath, [
+      "--import",
+      "tsx/esm",
+      path.join(workspaceRoot, "packages/contracts/src/generate.ts"),
+      "--check",
+    ], {
+      cwd: workspaceRoot,
+    });
+
+    if (stdout.trim()) {
+      process.stdout.write(stdout);
+    }
+    if (stderr.trim()) {
+      process.stderr.write(stderr);
+    }
+  } catch (error) {
+    if (error && typeof error === "object") {
+      if ("stdout" in error && typeof error.stdout === "string" && error.stdout.trim()) {
+        process.stdout.write(error.stdout);
+      }
+      if ("stderr" in error && typeof error.stderr === "string" && error.stderr.trim()) {
+        process.stderr.write(error.stderr);
+      }
+    }
+    throw error;
+  }
+}
+
+await verifyContractsFresh();
+
 await Promise.all([
   cleanDist("apps/runtime/dist"),
   cleanDist("packages/db/dist"),
