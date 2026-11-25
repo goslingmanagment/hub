@@ -120,7 +120,7 @@ export async function readAgentTeamSales(
   // carried over from the ledger and the ones recorded «со слов» — reach the ledger's rule here.
   const decisions = await listActiveSaleDecisions(db, ids);
   const reports = await listCurrentReportsOfSales(db, ids);
-  const claims = await listSaleClaims(db, { transactionIds: ids });
+  const claims = await listSaleClaims(db, { transactionIds: ids, limit: null });
   const reportViews: ReportView[] = reports.map((report) => ({
     handinId: report.handinId, shiftId: report.shiftId, userId: report.userId, version: report.version, submittedAt: report.submittedAt.getTime(), lines: report.lines,
   }));

@@ -236,7 +236,8 @@ export async function handInShiftReport(app: BoardApp, actor: HandinActor, input
     if (was !== "draft" && was !== "fixing") throw new PhaseConflictError(subject.shift.id, was);
     const expectedReviewerPersonId = await resolveExpectedReviewer({ db, logger: app.logger }, { shift: subject.shift, catalog, at: now });
     const marks = await listHandinMarks(db, handin.id);
-    const facts = await draftFacts(db, subject, handin, catalog, now, marks);
+    const agentGrant = actor.kind === "agent" ? { allowedPageIds: new Set(actor.pageIds) } : undefined;
+    const facts = await draftFacts(db, subject, handin, catalog, now, marks, [], agentGrant);
     const lines = draftLines(facts, marks);
     const offPlatform = offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
     const sums = reportSums(lines, facts.pages, offPlatform);

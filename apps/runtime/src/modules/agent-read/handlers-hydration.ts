@@ -790,7 +790,11 @@ export async function handleAgentHydrationRequestList(
       },
       ring,
     );
-  const snapshotExhausted = nextCursor === null;
+  // `maxId` freezes new inserts, so an unfiltered queue is a true frozen snapshot.
+  // When filtered by mutable `state`, an existing row with `id <= maxId` can enter
+  // or leave that state between pages, so report `frozenSnapshot: false` honestly.
+  const frozenSnapshot = query.state === undefined;
+  const snapshotExhausted = frozenSnapshot && nextCursor === null;
 
   const evidence = hydrationEvidence({
     planeMode,
@@ -800,7 +804,7 @@ export async function handleAgentHydrationRequestList(
     delivery: { snapshotExhausted, nextCursor },
     cursorConsumed,
     cursorCapable: true,
-    frozenSnapshot: true,
+    frozenSnapshot,
   });
 
   return {

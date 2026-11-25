@@ -93,8 +93,9 @@ export interface DraftContext {
   handinId: number | null;
   /** The sales the person's words in this report say «не моё» of: each stays their own line. */
   notMine?: ReadonlySet<number>;
-  /** Pages where this person is the sole active worker on the report day: unclaimed nobody sales show in «Рядом» ($0 until claimed). */
-  soloPages?: ReadonlySet<string>;
+  /** Pages where this person is the sole active worker on `reportDate`, bounded to that exact 24h Moscow day:
+   *  only unclaimed `nobody` sales (`reason !== "owner_nobody"`) inside `[from, to)` show in «Рядом» ($0 until claimed). */
+  soloDayWindow?: { pages: ReadonlySet<string>; from: number; to: number };
   /** Unclaimed `nobody` sales whose fan this person has personally messaged on that page in history: shown in «Рядом» ($0 until claimed). */
   messagedNobodyIds?: ReadonlySet<number>;
 }
@@ -151,13 +152,18 @@ export function classifySale(sale: DraftSale, context: DraftContext): Classified
   // the sole active worker on the report day (unless the owner already closed it as `owner_nobody`): shown at $0 so the
   // chatter can claim their own sales from the 24h day, staying `nobody` if left unticked.
   const heldByThisReport = reported !== undefined && reported.handinId === context.handinId;
-  const onSoloPage = context.soloPages?.has(sale.pageLabel) === true && sale.home.reason !== "owner_nobody";
+  const soloDayNobody = context.soloDayWindow !== undefined
+    && isTeamHiddenSaleHome(sale.home.kind)
+    && sale.home.reason !== "owner_nobody"
+    && context.soloDayWindow.pages.has(sale.pageLabel)
+    && sale.occurredAt >= context.soloDayWindow.from
+    && sale.occurredAt < context.soloDayWindow.to;
   const messagedNobody = sale.home.kind === "nobody"
     && sale.home.reason !== "owner_nobody"
     && alreadyIn === null
     && context.messagedNobodyIds?.has(sale.transactionId) === true;
-  if (isTeamHiddenSaleHome(sale.home.kind) && !heldByThisReport && !onSoloPage && !messagedNobody) return null;
-  if ((sale.source === "window" && (sale.heldByShift || sale.inReportWindow)) || (messagedNobody && sale.inReportWindow)) {
+  if (isTeamHiddenSaleHome(sale.home.kind) && !heldByThisReport && !soloDayNobody && !messagedNobody) return null;
+  if ((sale.source === "window" && (sale.heldByShift || sale.inReportWindow || soloDayNobody)) || (messagedNobody && sale.inReportWindow)) {
     return { sale, group: "near", added: false, shareMills: 0, toUserId: other?.userId ?? null, alreadyIn };
   }
   return null;

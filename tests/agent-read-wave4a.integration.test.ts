@@ -150,6 +150,35 @@ describe("Agent Read Plane Wave 4A regressions (BL-A1..A8, BL-A-1..A-9)", () => 
     const targetMatches = batchRes.matches.filter((m) => m.matchedValue.toLowerCase() === "target_two");
     expect(commonMatches).toHaveLength(5);
     expect([...new Set(targetMatches.map((m) => m.platformUserId))]).toEqual(["u-target"]);
+
+    // Exact platformUserId match (higher fan id) must sort ahead of 25 lower-id display_name matches.
+    const rankedFans = await upsertFans(db, [
+      ...Array.from({ length: 25 }, (_, i) => ({
+        platform: "onlyfans" as const,
+        platformUserId: `u-dn-noise-${i}`,
+        username: `dn_noise_${i}`,
+        displayName: "88001234",
+      })),
+      { platform: "onlyfans" as const, platformUserId: "88001234", username: "exact_id_fan", displayName: "Exact Fan" },
+    ]);
+    for (const f of rankedFans) {
+      await pool.query(
+        `insert into page_fans (platform_account_id, fan_id) values ($1, $2) on conflict do nothing`,
+        [page1!.id, f.id],
+      );
+    }
+    const rankedRes = await resolveAgentFanCandidates(db, {
+      pageIds: [page1!.id],
+      platform: "onlyfans",
+      values: ["88001234"],
+      includeAliases: true,
+      limit: 50,
+      perValueLimit: 21,
+    });
+    expect(rankedRes.matches[0]).toMatchObject({
+      platformUserId: "88001234",
+      matchKind: "platformUserId",
+    });
   });
 
   it("BL-A7 & BL-A-2: timeline dates subscription.ended at ends_at and follow.ended at last_seen_at", async () => {

@@ -43,7 +43,8 @@ export const SIGNED_CURSOR_MAX_LENGTH = 2048;
 const ENVELOPE_FORMAT = 1;
 const ENVELOPE_FORMAT_COMPRESSED = 2;
 /** Upper bound on inflated canonical JSON for format 2 envelopes (defense-in-depth). */
-const COMPRESSED_ENVELOPE_MAX_BYTES = 16_384;
+export const SIGNED_CURSOR_MAX_UNCOMPRESSED_BYTES = 16_384;
+const COMPRESSED_ENVELOPE_MAX_BYTES = SIGNED_CURSOR_MAX_UNCOMPRESSED_BYTES;
 const SCOPED_PAYLOAD_VERSION = 1;
 const SUBKEY_DOMAIN = "agency-hub:signed-cursor-subkey:v1";
 /** One instance mints and another decodes; their clocks may disagree by this much. */

@@ -607,6 +607,35 @@ export async function scheduleSaleDeliveries(db: Database, decision: SaleDecisio
     select count(*)::int as n from users u where u.id = any(${ids(users)})
       and ${testUserSql(sql`u.id`)} = ${testPageSql(sql`${decision.pageId}::bigint`)}`);
   if (num(valid.rows[0]?.n ?? 0) !== users.length) throw new Error("A decision recipient is outside the sale's realm");
+  // If an imported unlinked decision was ALREADY marked applied before linking (sale-claims-import.ts),
+  // carry that receipt into the recipient's delivery state so linking never double-delivers an already-counted share.
+  if (decision.appliedAt !== null) {
+    if (decision.appliedUserId === null) {
+      // Unknown recipient on a multi-way split: leave delivery rows uncreated so it stays on legacy applied_at
+      // for manual verification instead of blindly scheduling pending deliveries.
+      if (users.length > 1) return;
+      await db.execute(sql`
+        insert into sale_decision_deliveries (decision_id, recipient_user_id, state, report_date)
+        select ${decision.id}, u.id, 'applied', ${decision.appliedReportDate}::date
+        from users u where u.id = any(${ids(users)})
+        on conflict (decision_id, recipient_user_id) do nothing`);
+      return;
+    }
+    await db.execute(sql`
+      insert into sale_decision_deliveries (decision_id, recipient_user_id, state, report_date)
+      select ${decision.id}, u.id,
+        case when (u.id = ${decision.appliedUserId} or exists (
+          select 1 from person_logins a join person_logins b using (person_id)
+          where a.user_id = u.id and b.user_id = ${decision.appliedUserId}
+        )) then 'applied' else 'pending' end,
+        case when (u.id = ${decision.appliedUserId} or exists (
+          select 1 from person_logins a join person_logins b using (person_id)
+          where a.user_id = u.id and b.user_id = ${decision.appliedUserId}
+        )) then ${decision.appliedReportDate}::date else null end
+      from users u where u.id = any(${ids(users)})
+      on conflict (decision_id, recipient_user_id) do nothing`);
+    return;
+  }
   await db.execute(sql`
     insert into sale_decision_deliveries (decision_id, recipient_user_id)
     select ${decision.id}, u.id from users u where u.id = any(${ids(users)})
@@ -658,11 +687,18 @@ export async function updateReportDeliveries(db: Database, input: {
         select 1 from person_logins a join person_logins b using (person_id)
         where a.user_id = x.recipient_user_id and b.user_id = ${input.userId}))
     returning x.decision_id, x.recipient_user_id, d.transaction_id`);
-  return result.rows.map((row) => ({
+  const rows = result.rows.map((row) => ({
     decisionId: num(row.decision_id),
     recipientUserId: num(row.recipient_user_id),
     transactionId: num(row.transaction_id),
   }));
+  if (input.state === "applied" && rows.length > 0) {
+    const decisionIds = [...new Set(rows.map((row) => row.decisionId))];
+    await db.execute(sql`
+      insert into sale_decision_changes (decision_id, change)
+      select unnest(${ids(decisionIds)}), 'changed'`);
+  }
+  return rows;
 }
 
 /** Reverts a recipient's declined delivery on this open shift back to pending when they clear «не моё» in draft. */
@@ -788,7 +824,13 @@ export async function applySaleDelivery(db: Database, input: { id: number; userI
     where decision_id = ${input.id} and recipient_user_id = ${input.userId} and state = 'pending'`);
   if (!applied.rowCount) return false;
   const pending = await db.execute(sql`select 1 from sale_decision_deliveries where decision_id = ${input.id} and state = 'pending' limit 1`);
-  if (!pending.rows.length) await markSaleDecisionApplied(db, input);
+  if (!pending.rows.length) {
+    await markSaleDecisionApplied(db, input);
+  } else {
+    // Parent row stays un-applied while other recipients are still pending; publish a feed change so consumers
+    // reading `appliedDeliveries` learn of this recipient's acknowledgement.
+    await db.execute(sql`insert into sale_decision_changes (decision_id, change) values (${input.id}, 'changed')`);
+  }
   return true;
 }
 

@@ -730,4 +730,62 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     expect(rWait.body).toBe(rMiss.body);
   });
 
+  it("enforces agent key page grants on shift-report draft reads and line writes even when the chatter has a solo page", async (context) => {
+    if (!testDb) return context.skip();
+    const narrowKey = `${AGENT_KEY_TOKEN_PREFIX}h8-narrow-shared-only`;
+    await insertAgentKey(testDb.db, {
+      name: "h8-narrow-shared-only",
+      keyPrefix: narrowKey.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
+      keyDigest: sha256Hex(narrowKey),
+      capabilities: ["write:shift_reports"] as never,
+      pageIds: [sharedPage],
+      expiresAt: new Date(Date.now() + 30 * 86_400_000),
+      createdBy: users.boss!,
+    });
+    const day = "2026-11-23";
+    // Anna's shift row only records shared-1 (so a shared-1-only agent key passes readableSubject),
+    // while her schedule slot (page_id=NULL -> all working pages) adds solo-1 where she is the sole worker.
+    await testDb.pool.query(
+      `insert into person_schedule_slots (person_id, page_id, start_minute, end_minute)
+       select id, null, 600, 1080 from people where code = 'anna'`,
+    );
+    const shiftId = await insertShift(users.anna!, "shared-1", `${day}T10:00:00+03:00`, `${day}T18:00:00+03:00`, "going");
+    const soloNobody = await insertSale({
+      pageId: soloPage, fanId: fanAlpha, ref: "h8-grant-solo-nobody", netMills: 42_000,
+      occurredAt: `${day}T06:00:00+03:00`, home: "nobody", reason: "no_holder",
+    });
+
+    // Anna herself sees the solo-1 nobody sale in «Рядом» on her shift report draft.
+    const annaDraft = shiftReportResponseSchema.parse(
+      (await rawSession("anna", "GET", `/api/v1/shift-reports/${shiftId}`)).json(),
+    );
+    expect(annaDraft.view?.lines.some((line) => line.transactionId === soloNobody)).toBe(true);
+
+    // An agent key granted ONLY shared-1 must NOT see solo-1 or its sale in the draft.
+    const agentDraftRes = await server!.inject({
+      method: "GET",
+      url: `/api/v1/agent/shift-reports/draft?shiftId=${shiftId}`,
+      headers: { authorization: `Bearer ${narrowKey}` },
+    });
+    expect(agentDraftRes.statusCode, agentDraftRes.body).toBe(200);
+    const agentDraft = shiftReportResponseSchema.parse(agentDraftRes.json());
+    expect(agentDraft.view?.lines.some((line) => line.transactionId === soloNobody)).toBe(false);
+    expect(agentDraft.view?.pages.map((p) => p.pageLabel)).not.toContain("solo-1");
+
+    // And the narrow agent key cannot mutate the out-of-grant solo-1 sale line either.
+    const mutateRes = await server!.inject({
+      method: "POST",
+      url: "/api/v1/agent/shift-reports/line",
+      headers: { authorization: `Bearer ${narrowKey}` },
+      payload: {
+        shiftId,
+        transactionId: soloNobody,
+        statement: "mine",
+        telegramUserId: ANNA_TG,
+        sourceRef: "https://t.me/c/1/999",
+      },
+    });
+    expect(mutateRes.statusCode).toBe(404);
+  });
+
 });

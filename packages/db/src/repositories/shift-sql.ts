@@ -11,8 +11,8 @@ function tableOf(alias: string): SQL {
 
 /**
  * The chat (its page, platform and conversation ref) is not one with another
- * page of this hub (loravie ↔ loravievip forwarding media to each other, lora-2
- * writing to lora-3): that side is ours, not a fan — every message of the chat,
+ * page of this hub (e.g., two creator pages of the same agency forwarding media
+ * to each other): that side is ours, not a fan — every message of the chat,
  * the page's too. On OnlyFans the conversation ref names the other account; on
  * Fansly the chat's thread names its partner, and the fan's messages carry its
  * id (`fan`: the row's other side, when it names it). Known account ids are

@@ -401,7 +401,8 @@ export async function readSubject(app: HandinApp, actor: HandinActor, subject: S
   // The person's draft: their own reading, a team lead's and the owner's before anything is handed in.
   const wantsDraft = own || (latest === null && access.draftPreview);
   const marks = handin === null || !wantsDraft ? [] : await listHandinMarks(db, handin.id);
-  const facts = wantsDraft ? await draftFacts(db, subject, handin, catalog, now, marks) : null;
+  const agentGrant = actor.kind === "agent" ? { allowedPageIds: new Set(actor.pageIds) } : undefined;
+  const facts = wantsDraft ? await draftFacts(db, subject, handin, catalog, now, marks, [], agentGrant) : null;
   const draft = facts === null ? null : draftLines(facts, marks);
   const offPlatform = handin === null ? [] : offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
 
@@ -743,6 +744,13 @@ export async function setShiftReportLine(
   now: Date = new Date(),
 ): Promise<{ savedAt: string }> {
   const { subject, catalog } = await writableSubject(app, actor, input.shiftId);
+  const agentGrant = actor.kind === "agent" ? { allowedPageIds: new Set(actor.pageIds) } : undefined;
+  if (agentGrant !== undefined) {
+    const [targetSale] = await listHandinSalesByIds(app.db, [input.transactionId]);
+    if (!targetSale || !agentGrant.allowedPageIds.has(targetSale.pageId)) {
+      throw new NotFoundError("This sale is not in the shift's draft");
+    }
+  }
   const existing = await findHandinByShift(app.db, subject.shift.id);
   const marks = existing === null ? [] : await listHandinMarks(app.db, existing.id);
   const before = marks.find((mark) => mark.transactionId === input.transactionId);
@@ -783,7 +791,7 @@ export async function setShiftReportLine(
   let claimableNobody: { pageId: number } | null = null;
   if (statement !== null && wordChanged) {
     // A new word: the sale must be a line of the draft that takes it — or, «моё», a sale the person may add by hand.
-    const facts = await draftFacts(app.db, subject, existing, catalog, now, marks);
+    const facts = await draftFacts(app.db, subject, existing, catalog, now, marks, [], agentGrant);
     const line = facts.classified.find((one) => one.sale.transactionId === input.transactionId);
     if (line === undefined) {
       if (statement !== "mine") throw new NotFoundError("This sale is not in the shift's draft");
@@ -817,8 +825,7 @@ export async function setShiftReportLine(
   }
 
   const who = writer(actor);
-  let declinedDeliveries: UpdatedDeliveryRow[] = [];
-  let reopenedDeliveries: UpdatedDeliveryRow[] = [];
+  const isTest = await userIsTest(app, subject.shift.userId);
   await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     await lockSaleSettlements(db);
@@ -830,6 +837,8 @@ export async function setShiftReportLine(
       handinId: handin.id, transactionId: input.transactionId, statement: written, shareWithUserId: shareWith, toUserId: written === "give" ? giveTo : null, note,
       byUserId: who.byUserId, byAgentKeyId: who.byAgentKeyId, at: now,
     });
+    let declinedDeliveries: UpdatedDeliveryRow[] = [];
+    let reopenedDeliveries: UpdatedDeliveryRow[] = [];
     if (wordChanged && written === "not_mine") {
       declinedDeliveries = await updateReportDeliveries(db, {
         transactionIds: [input.transactionId], userId: subject.shift.userId,
@@ -839,6 +848,44 @@ export async function setShiftReportLine(
       reopenedDeliveries = await reopenReportDeliveries(db, {
         transactionIds: [input.transactionId], userId: subject.shift.userId, shiftId: subject.shift.id,
       });
+    }
+    // Open/close declined-delivery owner matters INSIDE the settlements lock transaction so a concurrent revert
+    // or owner cancel/supersede can never race with matter creation and leave a zombie matter behind.
+    if (declinedDeliveries.length > 0 && !isTest) {
+      const [sale] = await listHandinSalesByIds(db, [input.transactionId]);
+      const names = await listHandinNames(db, [subject.shift.userId]);
+      const personName = names.get(subject.shift.userId) ?? `#${subject.shift.userId}`;
+      const details = sale
+        ? `${sale.pageLabel}, ${formatUsdFromMills(sale.netMills)}, ${dayWords(moscowDayOfMs(sale.occurredAt.getTime()))}`
+        : `#${input.transactionId}`;
+      for (const delivery of declinedDeliveries) {
+        await openMatter(db, {
+          key: saleDeliveryDeclinedKey(delivery.decisionId, delivery.recipientUserId),
+          kind: SALE_DELIVERY_DECLINED_KIND,
+          source: "server",
+          title: `${personName} отклонил(а) отданную продажу («не моё»): ${details}`,
+          object: { type: "transaction", id: String(delivery.transactionId) },
+          pageIds: sale ? [sale.pageId] : [],
+          owner: { role: "owner" },
+          money: true,
+          evidence: {
+            decisionId: delivery.decisionId,
+            recipientUserId: delivery.recipientUserId,
+            transactionId: delivery.transactionId,
+            shiftId: subject.shift.id,
+          },
+          link: "/workboard/waiting",
+        }, { door: "system" }, now);
+      }
+    }
+    if (reopenedDeliveries.length > 0) {
+      for (const delivery of reopenedDeliveries) {
+        await closeMatter(db, {
+          key: saleDeliveryDeclinedKey(delivery.decisionId, delivery.recipientUserId),
+          how: "resolved",
+          writer: "server",
+        }, { door: "system" }, now);
+      }
     }
     if (wordChanged) {
       // A new word takes back a question asked from the draft about this sale.
@@ -886,46 +933,6 @@ export async function setShiftReportLine(
       }
     }
   });
-  if (declinedDeliveries.length > 0 && !(await userIsTest(app, subject.shift.userId))) {
-    const [sale] = await listHandinSalesByIds(app.db, [input.transactionId]);
-    const names = await listHandinNames(app.db, [subject.shift.userId]);
-    const personName = names.get(subject.shift.userId) ?? `#${subject.shift.userId}`;
-    const details = sale
-      ? `${sale.pageLabel}, ${formatUsdFromMills(sale.netMills)}, ${dayWords(moscowDayOfMs(sale.occurredAt.getTime()))}`
-      : `#${input.transactionId}`;
-    for (const delivery of declinedDeliveries) {
-      await openMatter(app.db, {
-        key: saleDeliveryDeclinedKey(delivery.decisionId, delivery.recipientUserId),
-        kind: SALE_DELIVERY_DECLINED_KIND,
-        source: "server",
-        title: `${personName} отклонил(а) отданную продажу («не моё»): ${details}`,
-        object: { type: "transaction", id: String(delivery.transactionId) },
-        pageIds: sale ? [sale.pageId] : [],
-        owner: { role: "owner" },
-        money: true,
-        evidence: {
-          decisionId: delivery.decisionId,
-          recipientUserId: delivery.recipientUserId,
-          transactionId: delivery.transactionId,
-          shiftId: subject.shift.id,
-        },
-        link: "/workboard/waiting",
-      }, { door: "system" }, now).catch((error: unknown) => {
-        app.logger.warn({ shiftId: subject.shift.id, err: error instanceof Error ? error.message : String(error) }, "shift report: failed to open declined-delivery owner matter");
-      });
-    }
-  }
-  if (reopenedDeliveries.length > 0) {
-    for (const delivery of reopenedDeliveries) {
-      await closeMatter(app.db, {
-        key: saleDeliveryDeclinedKey(delivery.decisionId, delivery.recipientUserId),
-        how: "resolved",
-        writer: "server",
-      }, { door: "system" }, now).catch((error: unknown) => {
-        app.logger.warn({ shiftId: subject.shift.id, err: error instanceof Error ? error.message : String(error) }, "shift report: failed to close declined-delivery owner matter");
-      });
-    }
-  }
   if (oldWayTo !== null || claimableNobody !== null) await runSaleClaims(app, now).catch(() => undefined);
   // «Общак» said or taken back: the owner's matter opens or closes now, not at the next pass.
   if (statement === "pot" || before?.statement === "pot") {
@@ -1159,8 +1166,9 @@ export async function setShiftReportComment(
   now: Date = new Date(),
 ) {
   const { subject, catalog } = await writableSubject(app, actor, input.shiftId);
+  const agentGrant = actor.kind === "agent" ? { allowedPageIds: new Set(actor.pageIds) } : undefined;
   const modelSlug = input.modelSlug ?? null;
-  if (modelSlug !== null && !(await isReportModel(app.db, { subject, catalog, modelSlug }, now))) {
+  if (modelSlug !== null && !(await isReportModel(app.db, { subject, catalog, modelSlug, allowedPageIds: agentGrant?.allowedPageIds }, now))) {
     throw new BadRequestError("This model is not one of the report's pages", { reason: "model_not_in_report" });
   }
   await app.db.transaction(async (tx) => {
@@ -1175,16 +1183,25 @@ export async function setShiftReportComment(
  * Whether a model is one of the report's: of the shift's pages or its counted version's, else of the posts the draft
  * would make now (the models its `comments` offer: a page of a «долёт» too).
  */
-async function isReportModel(db: Database, input: { subject: Subject; catalog: PageCatalog; modelSlug: string }, now: Date): Promise<boolean> {
-  const { subject, catalog, modelSlug } = input;
-  const ofPages = (labels: readonly string[]) => labels.some((label) => pageModelOf(catalog, label).modelSlug === modelSlug);
+async function isReportModel(
+  db: Database,
+  input: { subject: Subject; catalog: PageCatalog; modelSlug: string; allowedPageIds?: ReadonlySet<number> | undefined },
+  now: Date,
+): Promise<boolean> {
+  const { subject, catalog, modelSlug, allowedPageIds } = input;
+  const allowedLabel = (label: string) => {
+    if (allowedPageIds === undefined) return true;
+    const id = catalog.idOf.get(label);
+    return id !== undefined && allowedPageIds.has(id);
+  };
+  const ofPages = (labels: readonly string[]) => labels.some((label) => allowedLabel(label) && pageModelOf(catalog, label).modelSlug === modelSlug);
   if (ofPages(shiftPageLabels(subject.shift))) return true;
   const handin = await findHandinByShift(db, subject.shift.id);
   if (handin === null) return false;
   const latest = (await listCurrentHandinVersions(db, [handin.id])).get(handin.id);
   if (latest !== undefined && ofPages(latest.pages.map((page) => page.pageLabel))) return true;
   const marks = await listHandinMarks(db, handin.id);
-  const facts = await draftFacts(db, subject, handin, catalog, now, marks);
+  const facts = await draftFacts(db, subject, handin, catalog, now, marks, [], allowedPageIds ? { allowedPageIds } : undefined);
   const lines = draftLines(facts, marks);
   const offPlatform = offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
   const draft = { pages: reportSums(lines, facts.pages, offPlatform).pages, lines, comment: handin.comment, modelComments: handin.modelComments };

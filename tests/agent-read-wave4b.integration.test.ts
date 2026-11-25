@@ -343,7 +343,17 @@ describe("agent read plane Wave 4B fixes", () => {
     expect(body3.items).toHaveLength(1);
     expect(body3.delivery.nextCursor).toBeNull();
     expect(body3.delivery.cappedBy).toBeNull();
-    expect(body3.delivery.snapshotExhausted).toBe(true);
+    // Filtered by mutable `state=requested`: rows can change state during pagination, so not a frozen snapshot.
+    expect(body3.delivery.snapshotExhausted).toBe(false);
+
+    // Unfiltered queue is append-only under id <= highWater, so exhaustion is genuinely a frozen snapshot.
+    const unfiltered = await server!.inject({
+      method: "GET",
+      url: "/api/v1/agent/hydration-requests?limit=50",
+      headers: { cookie: ownerCookie },
+    });
+    expect(unfiltered.statusCode, unfiltered.body).toBe(200);
+    expect(unfiltered.json().delivery.snapshotExhausted).toBe(true);
 
     const walkedRefs = [
       ...body1.items.map((x: { requestRef: string }) => x.requestRef),
@@ -498,7 +508,36 @@ describe("agent read plane Wave 4B fixes", () => {
       ],
     );
 
-    // Verify terminal capture job sorts FIRST ahead of all 25 older live jobs.
+    // Also seed a dispatching request with a non-UUID execution_ref so the LEFT JOIN cast stays safe.
+    const nonUuidRef = randomUUID();
+    await testDb!.pool.query(
+      `insert into agent_hydration_requests (
+         request_ref, agent_key_id, page_id, conversation_ref, thread_id, state,
+         target_kind, target_before_at, reason_sha256, reason_length, idempotency_key,
+         request_fingerprint, coverage_fingerprint, lane_order_evaluated,
+         lane_selected, lane_cost_note, admissible,
+         dispatched_at, dispatch_deadline_at, execution_lane, execution_ref, dispatch_count
+       ) values (
+         $1::uuid, $2, $3, $4, $5, 'dispatching',
+         'thread_backfill_before', '2026-02-01T00:00:00Z'::timestamptz, $6, 10, $7,
+         $6, $6, array['free_local_replay', 'vendor_paid_high'],
+         'vendor_paid_high', 'ofapi_credits', true,
+         $8, $9, 'vendor_paid_high', 'non-uuid-legacy-ref', 1
+       )`,
+      [
+        nonUuidRef,
+        agentKeyId,
+        page1Id,
+        doneConv,
+        doneThreadId,
+        sha256Hex("non-uuid-ref"),
+        randomUUID(),
+        new Date(baseTime.getTime() + 120_000),
+        new Date(Date.now() + 60 * 60_000),
+      ],
+    );
+
+    // Verify terminal capture job sorts FIRST ahead of all 25 older live jobs (and non-UUID ref does not throw).
     const topBatch = await listDispatchingAgentHydrationRequests(testDb!.db, { limit: 1 });
     expect(topBatch[0]?.requestRef).toBe(doneRef);
 
@@ -530,9 +569,14 @@ describe("agent read plane Wave 4B fixes", () => {
     );
 
     const swept = await sweepStuckAgentHydration(appContext);
-    expect(swept).toBe(1);
+    expect(swept).toBe(2);
     const failed = await findAgentHydrationRequestByRef(testDb!.db, orphanRef);
     expect(failed.request).toMatchObject({
+      state: "failed",
+      lastError: "timeout",
+    });
+    const failedNonUuid = await findAgentHydrationRequestByRef(testDb!.db, nonUuidRef);
+    expect(failedNonUuid.request).toMatchObject({
       state: "failed",
       lastError: "timeout",
     });
