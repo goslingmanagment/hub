@@ -24,6 +24,7 @@
     "build:artifacts": "node scripts/build-production.mjs && pnpm --dir apps/dashboard exec vite build && node scripts/build-hub-cli.mjs && pnpm --dir apps/workboard exec vite build",
     "cli": "node --import tsx/esm apps/runtime/src/cli.ts",
     "hub": "node --import tsx/esm packages/hub-agent-cli/src/cli.ts",
+    "contracts:check": "node --import tsx/esm packages/contracts/src/generate.ts --check",
     "contracts:generate": "node --import tsx/esm packages/contracts/src/generate.ts",
     "worker": "node --import tsx/esm apps/runtime/src/worker.ts",
     "db:generate": "node scripts/db-generate-disabled.mjs",
