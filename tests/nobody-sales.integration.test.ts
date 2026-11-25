@@ -629,4 +629,105 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     expect((await testDb.pool.query("select id from sale_owner_decisions where transaction_id = $1", [unseen])).rows).toEqual([]);
   });
 
+  it("surfaces nobody sales to chatters who personally messaged that fan in history, matches page_alias, and names waiting PPV senders", async (context) => {
+    if (!testDb) return context.skip();
+    const day = "2026-11-11";
+    const fanAliasId = await insertFan(sharedPage, "901055", "lincoln92_", "");
+    await testDb.pool.query(
+      "update page_fans set page_alias = 'Theo/UK/' where fan_id = $1 and platform_account_id = $2",
+      [fanAliasId, sharedPage],
+    );
+    // Anna personally messaged this fan 30 days ago (even well outside the 48h rule window!).
+    await testDb.pool.query(
+      `insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at)
+       values ('fansly', $1, '777001', '901055', $2, 'fansly-extension', false, false, '2026-10-12T10:00:00Z')`,
+      [sharedPage, users.anna],
+    );
+    // Earlier same-day off-shift nobody sale on shared-1 (NOT a solo page).
+    const earlyNobody = await insertSale({
+      pageId: sharedPage, fanId: fanAliasId, ref: "h8-alias-early", netMills: 40_000,
+      occurredAt: `${day}T07:34:08+03:00`, home: "nobody", reason: "no_holder",
+    });
+    const shiftAnna = await insertShift(users.anna!, "shared-1", `${day}T18:00:00+03:00`, `${day}T23:50:00+03:00`, "closed");
+    const shiftBella = await insertShift(users.bella!, "shared-1", `${day}T18:00:00+03:00`, `${day}T23:50:00+03:00`, "closed");
+
+    // Anna (who personally messaged the fan 30d ago) sees the sale on her board at $0 with fan.alias = 'Theo/UK/' and fan.name = 'lincoln92_'.
+    const annaDraft = shiftReportResponseSchema.parse((await rawSession("anna", "GET", `/api/v1/shift-reports/${shiftAnna}`)).json());
+    const annaLine = annaDraft.view?.lines.find((line) => line.transactionId === earlyNobody);
+    expect(annaLine).toMatchObject({ group: "near", amountMills: 0, disputed: false, fan: { alias: "Theo/UK/", name: "lincoln92_", username: "lincoln92_" } });
+
+    // Bella (who never messaged the fan) does NOT see it on shared-1.
+    const bellaDraft = shiftReportResponseSchema.parse((await rawSession("bella", "GET", `/api/v1/shift-reports/${shiftBella}`)).json());
+    expect(bellaDraft.view?.lines.find((line) => line.transactionId === earlyNobody)).toBeUndefined();
+
+    // «Сообщить владельцу» matches by page_alias ('Theo/UK/', 'Theo/UK', and first '/'-segment 'Theo'), while noisy '+' collisions stay 404.
+    const aliasReportSale = await insertSale({
+      pageId: sharedPage, fanId: fanAliasId, ref: "h8-alias-report-1", netMills: 41_000,
+      occurredAt: `${day}T08:15:00+03:00`, home: "nobody", reason: "no_holder",
+    });
+    const reportByFirstWord = await rawSession("anna", "POST", `/api/v1/shift-reports/${shiftAnna}/report-sale`, {
+      fan: "theo", amountMills: 41_000, note: "общалась с Тео",
+    });
+    expect(reportByFirstWord.statusCode, reportByFirstWord.body).toBe(200);
+    expect(reportByFirstWord.json()).toMatchObject({ transactionId: aliasReportSale });
+
+    const aliasReportSale2 = await insertSale({
+      pageId: sharedPage, fanId: fanAliasId, ref: "h8-alias-report-2", netMills: 43_000,
+      occurredAt: `${day}T08:20:00+03:00`, home: "nobody", reason: "no_holder",
+    });
+    const reportWithoutSlash = await rawSession("anna", "POST", `/api/v1/shift-reports/${shiftAnna}/report-sale`, {
+      fan: "Theo/UK", amountMills: 43_000, note: "общалась с Тео",
+    });
+    expect(reportWithoutSlash.statusCode, reportWithoutSlash.body).toBe(200);
+    expect(reportWithoutSlash.json()).toMatchObject({ transactionId: aliasReportSale2 });
+
+    // Waiting PPV in GET /claimable names its sender + deadline, while POST /report-sale still returns byte-identical 404 (H8).
+    const now = Date.now();
+    const shiftAnnaRecent = await insertShift(
+      users.anna!, "shared-1",
+      new Date(now - 4 * 3_600_000).toISOString(),
+      new Date(now - 2 * 3_600_000).toISOString(),
+    );
+    const waitAt = new Date(now - 60 * 60_000);
+    const waitUntil = new Date(now + 5 * 86_400_000);
+    const waitingTx = await testDb.pool.query<{ id: string }>(
+      `insert into transactions (platform_account_id, fan_id, transaction_id, correlation_id, raw_type, canonical_type, transaction_state, raw_status,
+         gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, platform_fee_mills, occurred_at, source, currency)
+       values ($1, $2, 'h8-wait-ppv-1', 'offer-wait-1', 'message_purchase', 'message_purchase', 'posted', 'ok', 25000, 25000, 20000, 5000, $3::timestamptz, 'fansly:rest', 'USD')
+       returning id`,
+      [sharedPage, fanAliasId, waitAt.toISOString()],
+    );
+    const waitingTxId = Number(waitingTx.rows[0]!.id);
+    await testDb.pool.query(
+      `insert into message_media_offers (page_id, platform, message_ref, offer_ordinal, media_offer_ref, fan_platform_user_id, message_created_at,
+         first_observed_at, last_observed_at, content_hash, source_event_id, source_observation_id, source_account_seq)
+       values ($1, 'fansly', '777099', 0, 'offer-wait-1', '901055', $2::timestamptz, now(), now(), $3, 1, 1, 1)`,
+      [sharedPage, new Date(waitAt.getTime() - 10 * 60_000).toISOString(), "a".repeat(64)],
+    );
+    await testDb.pool.query(
+      `insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at)
+       values ('fansly', $1, '777099', '901055', $2, 'fansly-extension', true, true, $3::timestamptz)`,
+      [sharedPage, users.anna, new Date(waitAt.getTime() - 10 * 60_000).toISOString()],
+    );
+    await testDb.pool.query(
+      `insert into sale_homes (transaction_id, page_id, occurred_at, net_mills, home, reason, waits_until, shares, rule_version, computed_at)
+       values ($1, $2, $3::timestamptz, 20000, 'waiting', 'ppv_sender_no_shift', $4::timestamptz, '[]'::jsonb, '2026-11-12.1', now())`,
+      [waitingTxId, sharedPage, waitAt.toISOString(), waitUntil.toISOString()],
+    );
+
+    const claimableAnna = await rawSession("anna", "GET", `/api/v1/shift-reports/${shiftAnnaRecent}/claimable`);
+    expect(claimableAnna.statusCode, claimableAnna.body).toBe(200);
+    const waitingRow = (claimableAnna.json() as { sales: Array<{ transactionId: number; words: string; waitsUntil?: string | null; fan: { alias?: string | null } }> }).sales
+      .find((one) => one.transactionId === waitingTxId);
+    expect(waitingRow?.words).toContain("ваш PPV, уйдёт в вашу следующую смену (до ");
+    expect(waitingRow?.waitsUntil).toBe(waitUntil.toISOString());
+    expect(waitingRow?.fan.alias).toBe("Theo/UK/");
+
+    // POST /report-sale must still refuse waiting PPV with the exact same 404 body as a nonexistent ref (H8).
+    const rMiss = await rawSession("anna", "POST", `/api/v1/shift-reports/${shiftAnnaRecent}/report-sale`, { transactionRef: "h8-does-not-exist", note: "моя" });
+    const rWait = await rawSession("anna", "POST", `/api/v1/shift-reports/${shiftAnnaRecent}/report-sale`, { transactionRef: "h8-wait-ppv-1", note: "моя" });
+    expect(rWait.statusCode).toBe(404);
+    expect(rWait.body).toBe(rMiss.body);
+  });
+
 });

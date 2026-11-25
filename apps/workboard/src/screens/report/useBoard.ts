@@ -69,6 +69,8 @@ export function useBoard({ report, host, transport, light }: {
   // ── what is open ──
   const [menu, setMenu] = useState<string | null>(null);
   const [panel, setPanel] = useState<Panel>(null);
+  /** Panel queued to open right after a phase transition (e.g. «Не вижу свою продажу» reopening a counted report). */
+  const pendingPanel = useRef<Panel>(null);
   const [ask, setAsk] = useState<AskOpen | null>(null);
   /** The sale whose comment is being written; its text is the field's (`noteDraft`). */
   const [edit, setEdit] = useState<string | null>(null);
@@ -188,7 +190,9 @@ export function useBoard({ report, host, transport, light }: {
   }, [board.phase, board.candidate?.gengar.state, toast]);
   // A new phase closes what belonged to the old one: the windows, the menu, the forms of a draft.
   useEffect(() => {
-    setPanel(null);
+    const next = pendingPanel.current;
+    pendingPanel.current = null;
+    setPanel(next);
     setMenu(null);
     setAsk(null);
     if (board.phase !== "confirm") setRefuse(null);
@@ -376,9 +380,24 @@ export function useBoard({ report, host, transport, light }: {
     }
   };
 
-  const reopen = async () => {
+  const reopen = async (): Promise<boolean> => {
     await Promise.all([commitNote(), flushMemos()]);
-    await run({ op: "reopen" });
+    return run({ op: "reopen" });
+  };
+
+  /** «Не вижу свою продажу»: opens «Найти продажу» right away, reopening a counted/confirm report first when needed. */
+  const openFind = async () => {
+    if (!own || preview || write.isPending) return;
+    if (board.phase === "draft" || board.phase === "fixing") {
+      setMenu(null);
+      setPanel("find");
+      return;
+    }
+    if (board.phase === "counted" || board.phase === "confirm") {
+      pendingPanel.current = "find";
+      const ok = await reopen();
+      if (!ok) pendingPanel.current = null;
+    }
   };
 
   /** «Скопировать пост» of one model: only that model's text, never the posts joined («Отчётность» reads one model a post). */
@@ -418,7 +437,7 @@ export function useBoard({ report, host, transport, light }: {
     menu, menuRow, setMenu, panel, setPanel, ask, setAsk, edit, noteDraft, cancelNote, refuse, setRefuse, beforeOpen, setBeforeOpen,
     lit, selected, setSelected, miss,
     toastText, toast, run, show, showMany, reveal,
-    commitNote, openNote, unask, apply, tick, sendAsk, answer, sendRefuse, find, collapse, submit, confirm, reopen, copyPost, addSighting, resend,
+    commitNote, openNote, unask, apply, tick, sendAsk, answer, sendRefuse, find, collapse, submit, confirm, reopen, openFind, copyPost, addSighting, resend,
     memoFlushes, saveComment, flushMemos,
   };
 }

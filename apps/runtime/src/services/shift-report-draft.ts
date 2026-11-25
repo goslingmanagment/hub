@@ -25,6 +25,7 @@ import {
   listSaleDeliveries,
   listSaleFacts,
   listSaleHomes,
+  listSalesMessagedByUsers,
   listVisiblePages,
   versionReportDate,
   type Database,
@@ -313,10 +314,11 @@ export async function draftFacts(
   const soloPageLabels = new Set<string>();
   const reportDayStart = Date.parse(`${shift.reportDate}T00:00:00+03:00`);
   const reportDayEnd = reportDayStart + DAY_MS;
+  const candidatePageLabels = new Set([...window.pages, ...shiftPageLabels(shift)]);
   if (subject.person !== null && !Number.isNaN(reportDayStart)) {
-    const candidatePageIds = [...new Set([...window.pages, ...shiftPageLabels(shift)]
+    const candidatePageIds = [...candidatePageLabels]
       .map((label) => catalog.idOf.get(label))
-      .filter((id): id is number => id !== undefined))];
+      .filter((id): id is number => id !== undefined);
     if (candidatePageIds.length > 0) {
       const realm = (await isTestUser(db, shift.userId)) ? "test" : "live";
       const soloIds = await soloPagesForPerson(db, realm, subject.person.personId, shift.reportDate, candidatePageIds);
@@ -348,6 +350,8 @@ export async function draftFacts(
   const sales: DraftSale[] = live.answer.sales.map((sale, index) => {
     const home = live.homes[index]!;
     const at = Date.parse(sale.occurredAt);
+    const isDayNobody = home.kind === "nobody" && home.reason !== "owner_nobody"
+      && candidatePageLabels.has(sale.pageLabel) && !Number.isNaN(reportDayStart) && at >= reportDayStart && at < reportDayEnd;
     return {
       transactionId: Number(sale.transactionRef),
       pageLabel: sale.pageLabel,
@@ -371,21 +375,37 @@ export async function draftFacts(
       source: "window",
       heldByShift: workRef !== null && sale.holders.includes(workRef),
       inReportWindow: (window.pages.has(sale.pageLabel) && at >= window.from && at < window.to)
-        || (hasSoloPages && soloPageLabels.has(sale.pageLabel) && at >= reportDayStart && at < reportDayEnd),
+        || (hasSoloPages && soloPageLabels.has(sale.pageLabel) && at >= reportDayStart && at < reportDayEnd)
+        || isDayNobody,
     };
   });
 
-  const before = (await listSaleHomes(db, { from: new Date(window.from - HANDIN_LOOKBACK_DAYS * DAY_MS), to: from }))
-    .filter((row) => row.shares.some((share) => subject.userIds.includes(share.userId)));
+  const beforeToMs = Number.isNaN(reportDayEnd) ? from.getTime() : Math.max(from.getTime(), Math.min(reportDayEnd, now.getTime()));
+  const liveIds = new Set(sales.map((sale) => sale.transactionId));
+  const beforeAll = await listSaleHomes(db, { from: new Date(window.from - HANDIN_LOOKBACK_DAYS * DAY_MS), to: new Date(beforeToMs) });
+  const beforeCandidates = beforeAll.filter((row) => {
+    if (liveIds.has(row.transactionId)) return false;
+    const at = row.occurredAt.getTime();
+    if (at < from.getTime() && row.shares.some((share) => subject.userIds.includes(share.userId))) return true;
+    const label = catalog.labelOf.get(row.pageId) ?? String(row.pageId);
+    return row.home === "nobody" && row.reason !== "owner_nobody"
+      && candidatePageLabels.has(label) && !Number.isNaN(reportDayStart) && at >= reportDayStart && at < reportDayEnd;
+  });
+  const beforeNobodyIds = beforeCandidates.filter((row) => row.home === "nobody").map((row) => row.transactionId);
+  const beforeActiveDecisions = beforeNobodyIds.length === 0 ? new Set<number>() : new Set((await listActiveSaleDecisions(db, beforeNobodyIds)).keys());
+  const before = beforeCandidates.filter((row) => !(row.home === "nobody" && beforeActiveDecisions.has(row.transactionId)));
   const kinds = await listHandinSaleKinds(db, before.map((row) => row.transactionId));
   for (const row of before) {
     const label = catalog.labelOf.get(row.pageId) ?? String(row.pageId);
+    const at = row.occurredAt.getTime();
+    const isDayNobody = row.home === "nobody" && row.reason !== "owner_nobody"
+      && candidatePageLabels.has(label) && !Number.isNaN(reportDayStart) && at >= reportDayStart && at < reportDayEnd;
     sales.push({
       transactionId: row.transactionId,
       pageLabel: label,
       platform: catalog.info.get(label)?.platform ?? "fansly",
       kind: kinds.get(row.transactionId) ?? "",
-      occurredAt: row.occurredAt.getTime(),
+      occurredAt: at,
       netMills: row.netMills,
       home: {
         kind: row.home as SaleHomeKind,
@@ -397,7 +417,7 @@ export async function draftFacts(
       ppvSenderUserId: null,
       source: "before",
       heldByShift: false,
-      inReportWindow: false,
+      inReportWindow: isDayNobody,
     });
   }
 
@@ -436,9 +456,34 @@ export async function draftFacts(
   const since = new Date(window.from - (HANDIN_LOOKBACK_DAYS + 3) * DAY_MS).toISOString().slice(0, 10);
   const reported = await listReportedSales(db, { userIds: subject.userIds, since });
   const switchOnAt = subject.person?.submitsShiftSince?.getTime() ?? null;
+  // Surface unclaimed `nobody` sales on the board for chatters who have personally messaged that fan on that page in
+  // history (at $0 until the owner/Gengar decides).
+  const nobodyCandidates = sales.filter((sale) =>
+    sale.home.kind === "nobody" && sale.home.reason !== "owner_nobody" && (sale.heldByShift || sale.inReportWindow));
+  let messagedNobodyIds = new Set<number>();
+  if (nobodyCandidates.length > 0) {
+    const nobodyFans = await listHandinSaleFans(db, nobodyCandidates.map((sale) => sale.transactionId));
+    const checkSales = nobodyCandidates.flatMap((sale) => {
+      const pageId = catalog.idOf.get(sale.pageLabel);
+      const fanRef = nobodyFans.get(sale.transactionId)?.fanRef ?? null;
+      return pageId === undefined || fanRef === null ? [] : [{ transactionId: sale.transactionId, pageId, fanRef, at: new Date(sale.occurredAt) }];
+    });
+    messagedNobodyIds = await listSalesMessagedByUsers(db, { userIds: subject.userIds, sales: checkSales });
+  }
   // The sales the person's words here say «не моё» of: each stays their own line (shift-handin-rules.ts).
   const notMine = new Set(marks.filter((mark) => mark.statement === "not_mine").map((mark) => mark.transactionId));
-  const context = { shiftId: shift.id, workRef, userIds: new Set(subject.userIds), switchOnAt, submittedShiftIds, reported, handinId: handin?.id ?? null, notMine, soloPages: soloPageLabels };
+  const context = {
+    shiftId: shift.id,
+    workRef,
+    userIds: new Set(subject.userIds),
+    switchOnAt,
+    submittedShiftIds,
+    reported,
+    handinId: handin?.id ?? null,
+    notMine,
+    soloPages: soloPageLabels,
+    messagedNobodyIds,
+  };
 
   const classified: ClassifiedSale[] = [];
   const seen = new Set<number>();
@@ -559,7 +604,13 @@ function saleOfRow(row: HandinSaleRow): DraftSale {
     netMills: row.netMills,
     home: row.home === null
       ? { kind: "unknown", reason: "holder_not_in_works", pot: null, shares: [] }
-      : { kind: row.home.home as SaleHomeKind, reason: row.home.reason as SaleHomeReason, pot: row.home.pot, shares: row.home.shares },
+      : {
+        kind: row.home.home as SaleHomeKind,
+        reason: row.home.reason as SaleHomeReason,
+        pot: row.home.pot,
+        shares: row.home.shares,
+        waitsUntil: row.home.waitsUntil?.getTime() ?? null,
+      },
     ppvSenderUserId: null,
     source: "before",
     heldByShift: false,

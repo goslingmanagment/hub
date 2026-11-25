@@ -165,7 +165,9 @@ function FindSale({ api, close }: { api: BoardApi; close: () => void }) {
   const onBoard = new Set(allRows(api.board).map((row) => row.transactionId));
   const sales = (read.data?.sales ?? []).filter((sale) => !onBoard.has(sale.transactionId));
   const words = query.trim().toLowerCase().replace(/^@/, "");
-  const found = words === "" ? [] : sales.filter((sale) => [sale.fan.name, sale.fan.username].some((name) => name !== null && name.toLowerCase().includes(words)));
+  const found = words === "" ? [] : sales.filter((sale) =>
+    [sale.fan.alias ?? null, sale.fan.name, sale.fan.username].some((name) => name !== null && name.toLowerCase().includes(words)),
+  );
   const claim = (transactionId: number, note: string) => once(async () => {
     if (await api.run({ op: "line", transactionId, body: { statement: "mine", note } }, "Продажа добавлена в отчёт")) {
       setClaiming(null);
@@ -192,9 +194,11 @@ function FindSale({ api, close }: { api: BoardApi; close: () => void }) {
   });
   const saleRow = (sale: (typeof sales)[number]) => {
     const open = claiming?.id === sale.transactionId ? claiming : null;
+    const shownFan = fanOf(sale);
+    const loginSuffix = sale.fan.username !== null && sale.fan.username !== shownFan ? ` (@${sale.fan.username})` : "";
     return (
       <div className="dr" key={sale.transactionId}>
-        <span>{sale.pageLabel} · {fanOf(sale)}</span>
+        <span>{sale.pageLabel} · {shownFan}{loginSuffix}</span>
         <span className="a">{usd(sale.netMills)}</span>
         <span className="s">
           {day(sale.occurredAt)}, {clock(sale.occurredAt)} · {sale.words}
@@ -226,7 +230,7 @@ function FindSale({ api, close }: { api: BoardApi; close: () => void }) {
       {read.data && (
         <>
           <div className="dlg-t">Найти среди продаж команды</div>
-          <input className="fld" placeholder="Имя или логин фана" aria-label="Имя или логин фана" value={query} onChange={(event) => setQuery(event.target.value)} data-autofocus />
+          <input className="fld" placeholder="Имя, логин или заметка фана" aria-label="Имя, логин или заметка фана" value={query} onChange={(event) => setQuery(event.target.value)} data-autofocus />
           {words !== "" && (found.length === 0 ? <div className="dlg-e">Таких продаж нет.</div> : found.slice(0, 50).map(saleRow))}
         </>
       )}
@@ -236,7 +240,7 @@ function FindSale({ api, close }: { api: BoardApi; close: () => void }) {
         <input className="fld" placeholder="Номер транзакции" aria-label="Номер транзакции" maxLength={120} value={reportRef} onChange={(event) => setReportRef(event.target.value)} />
       </div>
       <div className="form-r">
-        <input className="fld" placeholder="Или фан (логин / имя / id)" aria-label="Фан" maxLength={200} value={reportFan} onChange={(event) => setReportFan(event.target.value)} disabled={hasRef} />
+        <input className="fld" placeholder="Или фан (логин / имя / заметка / id)" aria-label="Фан" maxLength={200} value={reportFan} onChange={(event) => setReportFan(event.target.value)} disabled={hasRef} />
         <input className="fld is-sum" inputMode="decimal" placeholder="Сумма, $" aria-label="Сумма в долларах" value={reportAmount} onChange={(event) => setReportAmount(event.target.value)} disabled={hasRef} />
       </div>
       <div className="form-r">

@@ -887,15 +887,26 @@ export interface HandinSaleFan {
   fanRef: string | null;
   name: string | null;
   username: string | null;
+  alias: string | null;
 }
 
 export async function listHandinSaleFans(db: Database, transactionIds: readonly number[]): Promise<Map<number, HandinSaleFan>> {
   if (transactionIds.length === 0) return new Map();
   const result = await db.execute<Row>(sql`
-    select t.id, f.platform_user_id as fan_ref, coalesce(f.display_name, f.username) as name, f.username
-    from transactions t left join fans f on f.id = t.fan_id
+    select t.id, f.platform_user_id as fan_ref,
+      coalesce(nullif(btrim(f.display_name), ''), f.username) as name,
+      f.username,
+      nullif(btrim(pf.page_alias), '') as alias
+    from transactions t
+    left join fans f on f.id = t.fan_id
+    left join page_fans pf on pf.platform_account_id = t.platform_account_id and pf.fan_id = t.fan_id
     where t.id = any(${ids([...new Set(transactionIds)])})`);
-  return new Map(result.rows.map((row) => [num(row.id), { fanRef: text(row.fan_ref), name: text(row.name), username: text(row.username) }]));
+  return new Map(result.rows.map((row) => [num(row.id), {
+    fanRef: text(row.fan_ref),
+    name: text(row.name),
+    username: text(row.username),
+    alias: text(row.alias),
+  }]));
 }
 
 /** The canonical kind of each sale (message_purchase, tip, …): a stored line keeps the rule's kind word. */
@@ -990,20 +1001,24 @@ export interface HandinSaleRow {
   kind: string;
   occurredAt: Date;
   netMills: number;
-  fan: { fanRef: string | null; name: string | null; username: string | null };
+  fan: { fanRef: string | null; name: string | null; username: string | null; alias?: string | null };
   /** Its home as `sale_homes` keeps it; null — not computed yet. */
-  home: { home: string; reason: string; pot: string | null; shares: Array<{ userId: number; workRef: string | null; shiftId: number | null; mills: number }> } | null;
+  home: { home: string; reason: string; pot: string | null; waitsUntil?: Date | null; shares: Array<{ userId: number; workRef: string | null; shiftId: number | null; mills: number }> } | null;
 }
 
 const SALE_SELECT = sql`
   select t.id, t.platform_account_id as page_id, p.label, p.platform, m.slug as model_slug, m.name as model_name,
     t.canonical_type::text as kind, t.occurred_at,
-    t.creator_net_amount_mills as net, f.platform_user_id as fan_ref, coalesce(f.display_name, f.username) as fan_name, f.username as fan_username,
-    h.home, h.reason, h.pot, h.shares
+    t.creator_net_amount_mills as net, f.platform_user_id as fan_ref,
+    coalesce(nullif(btrim(f.display_name), ''), f.username) as fan_name,
+    f.username as fan_username,
+    nullif(btrim(pf.page_alias), '') as fan_alias,
+    h.home, h.reason, h.pot, h.waits_until, h.shares
   from transactions t
   join pages p on p.id = t.platform_account_id
   join models m on m.id = p.model_id
   left join fans f on f.id = t.fan_id
+  left join page_fans pf on pf.platform_account_id = t.platform_account_id and pf.fan_id = t.fan_id
   left join sale_homes h on h.transaction_id = t.id`;
 
 function saleOf(row: Row): HandinSaleRow {
@@ -1017,11 +1032,50 @@ function saleOf(row: Row): HandinSaleRow {
     kind: String(row.kind),
     occurredAt: date(row.occurred_at),
     netMills: num(row.net),
-    fan: { fanRef: text(row.fan_ref), name: text(row.fan_name), username: text(row.fan_username) },
+    fan: { fanRef: text(row.fan_ref), name: text(row.fan_name), username: text(row.fan_username), alias: text(row.fan_alias) },
     home: row.home === null || row.home === undefined ? null : {
-      home: String(row.home), reason: String(row.reason), pot: text(row.pot), shares: jsonArray<{ userId: number; workRef: string | null; shiftId: number | null; mills: number }>(row.shares),
+      home: String(row.home),
+      reason: String(row.reason),
+      pot: text(row.pot),
+      waitsUntil: nullableDate(row.waits_until),
+      shares: jsonArray<{ userId: number; workRef: string | null; shiftId: number | null; mills: number }>(row.shares),
     },
   };
+}
+
+/**
+ * Which of these sales had at least one personal (non-mass) message from any of `userIds` to that fan on that page
+ * before the sale: uses `(page_id, fan_ref)` on `client_send_attributions`.
+ */
+export async function listSalesMessagedByUsers(
+  db: Database,
+  input: {
+    userIds: readonly number[];
+    sales: ReadonlyArray<{ transactionId: number; pageId: number; fanRef: string; at: Date }>;
+  },
+): Promise<Set<number>> {
+  if (input.userIds.length === 0 || input.sales.length === 0) return new Set();
+  const result = await db.execute<Row>(sql`
+    select s.id as transaction_id
+    from unnest(
+      ${sql.param(input.sales.map((sale) => String(sale.transactionId)))}::bigint[],
+      ${sql.param(input.sales.map((sale) => String(sale.pageId)))}::bigint[],
+      ${sql.param(input.sales.map((sale) => sale.fanRef))}::text[],
+      ${sql.param(input.sales.map((sale) => sale.at.toISOString()))}::timestamptz[]
+    ) as s(id, page_id, fan_ref, at)
+    where exists (
+      select 1 from client_send_attributions a
+      where a.page_id = s.page_id and a.fan_ref = s.fan_ref
+        and a.user_id = any(${ids(input.userIds)})
+        and a.observed_at <= s.at
+        and not exists (
+          select 1 from message_archive m
+          where m.account_id = a.page_id and m.platform = a.platform
+            and m.message_ref = a.platform_message_id
+            and coalesce(m.message_type, 1) = 2
+        )
+    )`);
+  return new Set(result.rows.map((row) => num(row.transaction_id)));
 }
 
 /** Check the page grant against the stored transactions, including sales added to a shift from another page. */
@@ -1058,10 +1112,35 @@ export function teamVisibleSaleHomeSql(alias: SQL = sql`h`, txAlias: SQL = sql`t
 /** The sales of the pages in [from, to), the newest first, at most `limit`: what a person may add by hand. */
 export async function listHandinSalesOnPages(
   db: Database,
-  input: { pageIds: readonly number[]; from: Date; to: Date; limit: number; hideNobody?: boolean },
+  input: {
+    pageIds: readonly number[];
+    from: Date;
+    to: Date;
+    limit: number;
+    hideNobody?: boolean;
+    /** When `hideNobody` is set, still expose unclaimed `nobody` sales whose fan any of these users personally messaged before the sale. */
+    includeNobodyForUserIds?: readonly number[];
+  },
 ): Promise<HandinSaleRow[]> {
   if (input.pageIds.length === 0) return [];
-  const visibleHome = input.hideNobody === true ? sql`and ${teamVisibleSaleHomeSql()}` : sql``;
+  const allowMessagedNobody = input.hideNobody === true && input.includeNobodyForUserIds !== undefined && input.includeNobodyForUserIds.length > 0
+    ? sql`or (h.home = 'nobody' and h.reason <> 'owner_nobody'
+        and not exists (select 1 from sale_owner_decisions d where d.transaction_id = t.id and d.state = 'active')
+        and f.platform_user_id is not null
+        and exists (
+          select 1 from client_send_attributions a
+          where a.page_id = t.platform_account_id and a.fan_ref = f.platform_user_id
+            and a.user_id = any(${ids(input.includeNobodyForUserIds)})
+            and a.observed_at <= t.occurred_at
+            and not exists (
+              select 1 from message_archive m
+              where m.account_id = a.page_id and m.platform = a.platform
+                and m.message_ref = a.platform_message_id
+                and coalesce(m.message_type, 1) = 2
+            )
+        ))`
+    : sql``;
+  const visibleHome = input.hideNobody === true ? sql`and (${teamVisibleSaleHomeSql()} ${allowMessagedNobody})` : sql``;
   const result = await db.execute<Row>(sql`${SALE_SELECT}
     where t.platform_account_id = any(${ids(input.pageIds)}) and t.is_active and t.gross_amount_mills > 0
       and t.canonical_type in ('subscription', 'tip', 'message_purchase', 'post_purchase', 'stream_tip')
@@ -1099,10 +1178,20 @@ export async function findSalesForReportClaim(
   } else {
     const fan = (input.fan ?? "").trim().replace(/^@+/u, "");
     if (fan === "" || input.amountMills === undefined) return [];
+    const fanWithoutTrailingSlash = fan.replace(/\/+$/u, "");
+    const aliasTrimmedMatch = fanWithoutTrailingSlash === ""
+      ? sql`false`
+      : sql`(nullif(rtrim(btrim(pf.page_alias), '/'), '') is not null
+          and lower(rtrim(btrim(pf.page_alias), '/')) = lower(${fanWithoutTrailingSlash}))`;
     matchSql = sql`(lower(coalesce(f.username, '')) = lower(${fan})
-      or lower(coalesce(f.display_name, '')) = lower(${fan})
+      or lower(coalesce(btrim(f.display_name), '')) = lower(${fan})
       or f.platform_user_id = ${fan}
-      or ('u' || f.platform_user_id) = ${fan})
+      or ('u' || f.platform_user_id) = ${fan}
+      or lower(coalesce(btrim(pf.page_alias), '')) = lower(${fan})
+      or ${aliasTrimmedMatch}
+      or (position('/' in coalesce(pf.page_alias, '')) > 0
+        and length(btrim(split_part(btrim(pf.page_alias), '/', 1))) >= 2
+        and lower(btrim(split_part(btrim(pf.page_alias), '/', 1))) = lower(${fan})))
       and (t.creator_net_amount_mills = ${input.amountMills} or t.gross_amount_mills = ${input.amountMills})`;
   }
   const result = await db.execute<Row>(sql`${SALE_SELECT}

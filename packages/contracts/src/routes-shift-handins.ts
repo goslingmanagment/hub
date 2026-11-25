@@ -92,7 +92,7 @@ export const shiftReportLineSchema = z.object({
   kind: z.string(),
   occurredAt: isoTimestamp,
   netMills: mills,
-  fan: z.object({ fanRef: z.string().nullable(), name: z.string().nullable(), username: z.string().nullable() }),
+  fan: z.object({ fanRef: z.string().nullable(), name: z.string().nullable(), username: z.string().nullable(), alias: z.string().nullable().optional() }),
   rule: z.object({
     /** The rule's home: shift, visit, pot, waiting, decide, nobody, before_rule, unknown. */
     home: z.string(),
@@ -258,7 +258,7 @@ export const shiftReportCommentBodySchema = z.object({
 const shiftReportReportSaleFields = {
   /** Platform transaction reference or Hub transaction id. */
   transactionRef: z.string().trim().min(1).max(120).optional(),
-  /** Fan username, display name, or platform id (paired with `amountMills`). */
+  /** Fan username, display name, page alias, or platform id (paired with `amountMills`). */
   fan: z.string().trim().min(1).max(200).optional(),
   /** Sale amount in mills (paired with `fan`). */
   amountMills: mills.min(1).max(100_000_000).optional(),
@@ -495,11 +495,13 @@ export const shiftReportClaimableSaleSchema = z.object({
   kind: z.string(),
   occurredAt: isoTimestamp,
   netMills: mills,
-  fan: z.object({ fanRef: z.string().nullable(), name: z.string().nullable(), username: z.string().nullable() }),
-  /** The rule's home: nobody — «ничья» (it counts plainly when added); anything else — counted and disputed when added. */
+  fan: z.object({ fanRef: z.string().nullable(), name: z.string().nullable(), username: z.string().nullable(), alias: z.string().nullable().optional() }),
+  /** The rule's home: nobody — «ничья» (disputed when added); anything else — counted and disputed when added. */
   home: z.string(),
   /** Whose it is by the rule, in plain words. */
   words: z.string(),
+  /** For a waiting PPV (`home === 'waiting'`): the deadline for its sender's next shift; null/absent otherwise. */
+  waitsUntil: isoTimestamp.nullable().optional(),
 });
 
 export const shiftReportClaimableResponseSchema = z.object({
@@ -629,7 +631,7 @@ export const agentShiftReportCheckSchema = z.object({
     kind: z.string(),
     occurredAt: isoTimestamp,
     netMills: mills,
-    fan: z.object({ fanRef: z.string().nullable(), name: z.string().nullable(), username: z.string().nullable() }),
+    fan: z.object({ fanRef: z.string().nullable(), name: z.string().nullable(), username: z.string().nullable(), alias: z.string().nullable().optional() }),
     statement: shiftReportWordEnum.nullable(),
     /** The colleague of «пополам» or of «отдал»; null — none. */
     withUserId: intId.nullable(),

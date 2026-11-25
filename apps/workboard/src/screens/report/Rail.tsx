@@ -234,10 +234,16 @@ function Foot({ api }: { api: BoardApi }) {
       );
     }
   }
+  const canFind = own && !preview && board.phase !== "checking";
   const line = pressLineOf(board, report, { own, preview, host });
   return (
     <div className="rail-f">
       {press}
+      {canFind && (
+        <button type="button" className="btn btn--quiet btn--sm btn--wide" disabled={pending} onClick={() => void api.openFind()}>
+          Не вижу свою продажу
+        </button>
+      )}
       <div className="fl">
         <span>{line}</span>
         <button type="button" className="kq" data-panel="keys" aria-label="Клавиши" title="Клавиши" aria-expanded={api.panel === "keys"}

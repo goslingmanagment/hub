@@ -45,6 +45,7 @@ import {
   listOpenPotOffers,
   listReportedSales,
   listSaleClaims,
+  listSaleFacts,
   lockSaleSettlements,
   reopenReportDeliveries,
   updateReportDeliveries,
@@ -57,6 +58,7 @@ import {
   type Database,
   type HandinPerson,
   type HandinRow,
+  type HandinSaleFan,
   type HandinSaleRow,
   type HandinShift,
   type HandinVersionLine,
@@ -152,7 +154,7 @@ interface ViewContext {
   details: Map<number, ShiftReportLineFacts>;
   catalog: PageCatalog;
   names: Map<number, string>;
-  fans: Map<number, { fanRef: string | null; name: string | null; username: string | null }>;
+  fans: Map<number, HandinSaleFan>;
 }
 
 function wireLine(line: HandinVersionLine, context: ViewContext): ShiftReportLine | null {
@@ -166,7 +168,7 @@ function wireLine(line: HandinVersionLine, context: ViewContext): ShiftReportLin
     kind: line.kind,
     occurredAt: line.occurredAt ?? new Date(0).toISOString(),
     netMills: line.netMills,
-    fan: context.fans.get(line.transactionId) ?? { fanRef: null, name: null, username: null },
+    fan: context.fans.get(line.transactionId) ?? { fanRef: null, name: null, username: null, alias: null },
     rule: {
       home: line.rule.home,
       reason: line.rule.reason,
@@ -778,6 +780,7 @@ export async function setShiftReportLine(
   // «Пополам» or «отдать» with a colleague who hands shifts in the old way (no board): the decider decides — a Telegram
   // post knows decisions, not agreements (arena round 3) — and no day of silence runs.
   let oldWayTo: { userId: number; pageId: number | null } | null = null;
+  let claimableNobody: { pageId: number } | null = null;
   if (statement !== null && wordChanged) {
     // A new word: the sale must be a line of the draft that takes it — or, «моё», a sale the person may add by hand.
     const facts = await draftFacts(app.db, subject, existing, catalog, now, marks);
@@ -785,9 +788,11 @@ export async function setShiftReportLine(
     if (line === undefined) {
       if (statement !== "mine") throw new NotFoundError("This sale is not in the shift's draft");
       const claimable = await claimableSales(app.db, subject, actor, existing, now);
-      if (!claimable.some((row) => row.transactionId === input.transactionId)) {
+      const matched = claimable.find((row) => row.transactionId === input.transactionId);
+      if (matched === undefined) {
         throw new NotFoundError("This sale cannot be added to this report", { reason: "not_claimable" });
       }
+      if (matched.home?.home === "nobody") claimableNobody = { pageId: matched.pageId };
     } else if (line.claimed === true ? statement !== "mine" : !statementAllowed(line.group, statement)) {
       throw new BadRequestError("This line does not take that word", { reason: "statement_not_allowed" });
     }
@@ -858,6 +863,28 @@ export async function setShiftReportLine(
         await reopenSaleClaim(db, known.id, fields, now);
       }
     }
+    if (claimableNobody !== null) {
+      const fields = {
+        pageId: claimableNobody.pageId, kind: "claim" as const, claimantVersion: null, statement: "mine" as const,
+        shareWithUserId: null, claimantNote: note, claimedAt: now, sideShiftId: null,
+        state: "owner" as const, escalatedAt: now, escalatedWhy: "no_side" as const,
+      };
+      const known = (await listSaleClaims(db, { transactionIds: [input.transactionId] }))
+        .find((claim) => claim.claimantHandinId === handin.id && claim.sideUserId === null);
+      if (known === undefined) {
+        await insertSaleClaim(db, {
+          ...fields, transactionId: input.transactionId, claimantUserId: subject.shift.userId, claimantHandinId: handin.id,
+          sideUserId: null, origin: "draft",
+        }, now);
+      } else if (known.state === "withdrawn") {
+        await reopenSaleClaim(db, known.id, fields, now);
+      } else if (known.state === "asked" || known.state === "owner") {
+        await updateSaleClaim(db, known.id, {
+          claimantNote: note, statement: "mine", state: "owner",
+          escalatedAt: known.escalatedAt ?? now, escalatedWhy: known.escalatedWhy ?? "no_side",
+        }, now);
+      }
+    }
   });
   if (declinedDeliveries.length > 0 && !(await userIsTest(app, subject.shift.userId))) {
     const [sale] = await listHandinSalesByIds(app.db, [input.transactionId]);
@@ -899,7 +926,7 @@ export async function setShiftReportLine(
       });
     }
   }
-  if (oldWayTo !== null) await runSaleClaims(app, now).catch(() => undefined);
+  if (oldWayTo !== null || claimableNobody !== null) await runSaleClaims(app, now).catch(() => undefined);
   // «Общак» said or taken back: the owner's matter opens or closes now, not at the next pass.
   if (statement === "pot" || before?.statement === "pot") {
     await syncCheckMatters(app, now).catch((error: unknown) => {
@@ -923,7 +950,14 @@ async function claimableSales(db: Database, subject: Subject, actor: HandinActor
     const granted = new Set(actor.pageIds);
     pageIds = pageIds.filter((id) => granted.has(id));
   }
-  const rows = await listHandinSalesOnPages(db, { pageIds, from: new Date(now.getTime() - CLAIMABLE_DAYS * DAY_MS), to: now, limit: CLAIMABLE_LIMIT, hideNobody: true });
+  const rows = await listHandinSalesOnPages(db, {
+    pageIds,
+    from: new Date(now.getTime() - CLAIMABLE_DAYS * DAY_MS),
+    to: now,
+    limit: CLAIMABLE_LIMIT,
+    hideNobody: true,
+    includeNobodyForUserIds: subject.userIds,
+  });
   const reported = await listReportedSales(db, { userIds: subject.userIds, since: new Date(now.getTime() - (CLAIMABLE_DAYS + 3) * DAY_MS).toISOString().slice(0, 10) });
   return rows.filter((row) => {
     const held = reported.get(row.transactionId);
@@ -1060,22 +1094,43 @@ export async function readShiftReportClaimable(app: HandinApp, actor: HandinActo
   const { subject } = await writableSubject(app, actor, shiftId);
   const handin = await findHandinByShift(app.db, subject.shift.id);
   const rows = await claimableSales(app.db, subject, actor, handin, now);
-  const names = await listHandinNames(app.db, rows.flatMap((row) => row.home?.shares.map((share) => share.userId) ?? []));
+  const waitingIds = rows.filter((row) => row.home?.home === "waiting").map((row) => row.transactionId);
+  const waitingFacts = waitingIds.length === 0
+    ? new Map()
+    : new Map((await listSaleFacts(app.db, { transactionIds: waitingIds })).map((fact) => [fact.transactionId, fact]));
+  const names = await listHandinNames(app.db, [
+    ...rows.flatMap((row) => row.home?.shares.map((share) => share.userId) ?? []),
+    ...[...waitingFacts.values()].flatMap((fact) => (fact.ppvSender === null ? [] : [fact.ppvSender.userId])),
+  ]);
   // A sale someone gave to the pot waits for the owner: never «ничья → Это моё» meanwhile.
   const potOffers = new Set((await listOpenPotOffers(app.db)).map((one) => one.transactionId));
   const sales = rows.map((row) => {
     if (potOffers.has(row.transactionId)) {
       return {
         transactionId: row.transactionId, pageLabel: row.pageLabel, platform: row.platform, kind: row.kind, occurredAt: row.occurredAt.toISOString(),
-        netMills: row.netMills, fan: row.fan, home: "pot", words: "общак, решает владелец",
+        netMills: row.netMills, fan: row.fan, home: "pot", words: "общак, решает владелец", waitsUntil: null,
       };
     }
     const to = row.home?.shares.find((share) => !subject.userIds.includes(share.userId)) ?? null;
     const own = row.home?.shares.some((share) => subject.userIds.includes(share.userId)) ?? false;
     const homeKind = (row.home?.home ?? "unknown") as SaleHomeKind;
+    const waitingSenderId = homeKind === "waiting" ? waitingFacts.get(row.transactionId)?.ppvSender?.userId ?? null : null;
+    const isOwnWaiting = waitingSenderId !== null && subject.userIds.includes(waitingSenderId);
+    const waitingSenderName = waitingSenderId === null ? null : names.get(waitingSenderId) ?? null;
+    const waitsUntil = homeKind === "waiting" ? row.home?.waitsUntil ?? null : null;
     const words = row.home === null ? "правило ещё не посчитало её"
       : own ? "по правилу ваша, в отчёт другой вашей смены"
-        : reasonWords({ group: "near", added: false, reason: row.home.reason as SaleHomeReason, homeKind, toName: to === null ? null : names.get(to.userId) ?? null, senderName: null, alreadyIn: null });
+        : reasonWords({
+          group: "near",
+          added: false,
+          reason: row.home.reason as SaleHomeReason,
+          homeKind,
+          toName: to === null ? null : names.get(to.userId) ?? null,
+          senderName: waitingSenderName,
+          isOwnWaiting,
+          waitsUntil,
+          alreadyIn: null,
+        });
     return {
       transactionId: row.transactionId,
       pageLabel: row.pageLabel,
@@ -1086,6 +1141,7 @@ export async function readShiftReportClaimable(app: HandinApp, actor: HandinActo
       fan: row.fan,
       home: homeKind,
       words,
+      waitsUntil: waitsUntil?.toISOString() ?? null,
     };
   });
   sales.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));

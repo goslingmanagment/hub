@@ -52,8 +52,15 @@ export const upper = (words: string) => (words === "" ? words : words[0]!.toUppe
 /** The person's line after a colon, in quotes; the quotes inside it as „…“ (never «…«…»»); nothing for no line. */
 export const said = (note: string | null | undefined) => (note && note.trim() !== "" ? `: «${note.trim().replace(/«/g, "„").replace(/»/g, "“")}»` : "");
 
-/** A sale's fan as the site names them: the name, else the login, never an empty word. */
-export const fanOf = (row: { fan: { name: string | null; username: string | null } }) => row.fan.name ?? row.fan.username ?? "фан без имени";
+/** A page alias worth showing as the fan's label (skips bare markers like «+» with no letter or digit). */
+export const meaningfulAlias = (alias: string | null | undefined): string | null => {
+  const trimmed = alias?.trim() ?? "";
+  return trimmed !== "" && /[\p{L}\p{N}]/u.test(trimmed) ? trimmed : null;
+};
+
+/** A sale's fan as the board names them: meaningful page alias, else site display name, else username. */
+export const fanOf = (row: { fan: { name: string | null; username: string | null; alias?: string | null | undefined } }) =>
+  meaningfulAlias(row.fan.alias) ?? row.fan.name ?? row.fan.username ?? "фан без имени";
 
 // ── the shift ─────────────────────────────────────────────────────────────────
 
@@ -250,8 +257,14 @@ export function noteOf(row: Row): { text: string; by: string | null } | null {
   return agent === null ? null : { text: agent, by: "написал Генгар" };
 }
 
-/** «@login», the row's title beside the fan's name. */
-export const rowTitleOf = (row: Row) => `${row.siteWords} ${fanOf(row)}${row.fan.username !== null && row.fan.username !== row.fan.name ? ` @${row.fan.username}` : ""}`;
+/** Full tooltip beside the fan's label: shows site name and @login when the board displays a page alias or display name. */
+export const rowTitleOf = (row: Row) => {
+  const shown = fanOf(row);
+  const extra: string[] = [];
+  if (row.fan.name !== null && row.fan.name !== shown && row.fan.name !== row.fan.username) extra.push(row.fan.name);
+  if (row.fan.username !== null && row.fan.username !== shown) extra.push(`@${row.fan.username}`);
+  return `${row.siteWords} ${shown}${extra.length > 0 ? ` ${extra.join(" ")}` : ""}`;
+};
 
 // ── «Чья продажа»: the menu ───────────────────────────────────────────────────
 
