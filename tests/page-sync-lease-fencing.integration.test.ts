@@ -879,7 +879,7 @@ describe("page sync lease fencing", () => {
       await requestPageSync(testDb.db, { pageId: page.id, streams: ["light"], source: "manual", now });
       // 3. `fan_identities`: operator-paused -> must stay operator-paused.
       await pausePageSync(testDb.db, { pageId: page.id, streams: ["fan_identities"], now });
-      // 4. `dm_conversations`: blocked with `blocker_kind = 'dependency'` -> must keep its dependency blocker.
+      // 4. `dm_conversations`: blocked only with transient `blocker_kind = 'dependency'` -> parks under auth.
       await requestPageSync(testDb.db, { pageId: page.id, streams: ["dm_conversations"], source: "manual", now });
 
       // Second page with an already-auth-blocked stream to confirm auth blockers still refresh cleanly.
@@ -943,8 +943,9 @@ describe("page sync lease fencing", () => {
         blockerCode: "bad_payload",
       });
       expect(await getPageSyncState(testDb.db, page.id, "dm_conversations")).toMatchObject({
-        status: "blocked",
-        blockerKind: "dependency",
+        status: "paused",
+        blockerKind: "auth",
+        blockerCode: "session_expired",
       });
       expect(await getPageSyncState(testDb.db, page2.id, "light")).toMatchObject({
         status: "paused",
