@@ -286,17 +286,30 @@ export async function handleAgentCapabilities(
       // The catalog NAMES its holes. A dataset omitted because it has no serving
       // table would be indistinguishable from one that does not exist, which is
       // the whole failure mode this plane exists to remove.
-      ...AGENT_PLANNED_DATASET_NAMES.map((dataset) => ({
-        dataset,
-        availability: "planned" as const,
-        platforms: [] as Platform[],
-        moneyBearing: false,
-        requiredCapabilities: [] as AgentCapability[],
-        ownContent: false,
-        captureState: "captured_unparsed" as const,
-        fields: [],
-        defaultSort: null,
-      })),
+      // BL-A-4: classify each planned dataset honestly by whether any capture
+      // lane collects its raw facts today (`captured_unparsed`) vs none at all
+      // (`not_captured`).
+      ...AGENT_PLANNED_DATASET_NAMES.map((dataset) => {
+        const plannedCaptureState: Record<(typeof AGENT_PLANNED_DATASET_NAMES)[number], "captured_unparsed" | "not_captured"> = {
+          fan_earnings: "captured_unparsed",
+          stories: "captured_unparsed",
+          fan_lists: "captured_unparsed",
+          chargebacks: "captured_unparsed",
+          livestreams: "not_captured",
+          blocks: "not_captured",
+        };
+        return {
+          dataset,
+          availability: "planned" as const,
+          platforms: [] as Platform[],
+          moneyBearing: false,
+          requiredCapabilities: [] as AgentCapability[],
+          ownContent: false,
+          captureState: plannedCaptureState[dataset],
+          fields: [],
+          defaultSort: null,
+        };
+      }),
     ];
 
     const response: AgentCapabilitiesResponse = {
@@ -438,8 +451,12 @@ export async function handleAgentResolve(
     }));
     const allValues = [...new Set(perInput.flatMap((entry) => entry.normalized))];
 
-    // A resolve can carry 50 inputs x 20 candidates.
-    const candidateLimit = Math.min(20 * body.inputs.length, 1000);
+    // BL-A-7: apply the 20-candidate cap per input value in SQL (fetching 21
+    // per value so `candidatesCapped` is exact) rather than a single global
+    // limit that lets one noisy input starve the rest of the batch.
+    const perInputCap = 20;
+    const perValueLimit = perInputCap + 1;
+    const candidateLimit = Math.min(perValueLimit * Math.max(allValues.length, body.inputs.length), 2500);
     const resolved = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
       resolveAgentFanCandidates(tx, {
         pageIds: scope.pageIds,
@@ -447,6 +464,7 @@ export async function handleAgentResolve(
         values: allValues,
         includeAliases: body.includeAliases,
         limit: candidateLimit,
+        perValueLimit,
       }), "agent_resolve");
 
     const fanIds = [...new Set(resolved.matches.map((match) => match.fanId))];
@@ -455,7 +473,10 @@ export async function handleAgentResolve(
         listAgentFanThreads(tx, { pageIds: scope.pageIds, fanIds }), "agent_resolve_threads")
       : { rows: [], witnesses: [] };
 
-    const platforms = [...new Set(scope.pages.map((page) => page.platform))] as Platform[];
+    // BL-A-6: narrow scopeFieldStates platforms by the effective platform filter.
+    const platforms = body.platform !== undefined
+      ? [body.platform as Platform]
+      : ([...new Set(scope.pages.map((page) => page.platform))] as Platform[]);
     const scopeFieldStates = computeScopeFieldStates({
       fields: claimFields ?? ["platformUserId", "username", "displayName"],
       platforms,
@@ -498,11 +519,12 @@ export async function handleAgentResolve(
 
     const items = perInput.map((entry) => {
       const wanted = new Set(entry.normalized.map((value) => value.toLowerCase()));
-      const candidates = resolved.matches
+      const matching = resolved.matches
         .filter((match) =>
           wanted.has(match.matchedValue.toLowerCase())
-          || wanted.has(match.platformUserId.toLowerCase()))
-        .slice(0, 20)
+          || wanted.has(match.platformUserId.toLowerCase()));
+      const candidates = matching
+        .slice(0, perInputCap)
         .map((match) => ({
           platform: match.platform as Platform,
           platformUserId: match.platformUserId,
@@ -516,7 +538,7 @@ export async function handleAgentResolve(
           createdAtExternal: isoOrNull(match.createdAtExternal),
           deletedDetectedAt: isoOrNull(match.deletedDetectedAt),
           pages: threads.rows
-            .filter((thread) => thread.fanId === match.fanId)
+            .filter((thread) => thread.fanId === match.fanId && (match.pageId === null || thread.pageId === match.pageId))
             .map((thread) => ({
               pageLabel: thread.pageLabel,
               platform: thread.platform as Platform,
@@ -546,7 +568,7 @@ export async function handleAgentResolve(
         input: { raw: entry.input.raw, hint: entry.input.hint },
         normalized: entry.normalized,
         candidates,
-        candidatesCapped: candidates.length >= 20,
+        candidatesCapped: matching.length > perInputCap,
       };
     });
 
@@ -586,11 +608,13 @@ export async function handleAgentPerson(
   const scope = await beginAgentRequest(appContext, principal, { operation: "agentPerson" });
   try {
     const claimFields = query.claimFields ?? null;
-    const narrowed = query.pageLabel === undefined
+    const narrowed = (query.pageLabel === undefined
       ? scope.pages
-      : scope.pages.filter((page) => page.pageLabel === query.pageLabel);
+      : scope.pages.filter((page) => page.pageLabel === query.pageLabel))
+      .filter((page) => page.platform === params.platform);
     const pageIds = narrowed.map((page) => page.id);
-    const platforms = [...new Set(narrowed.map((page) => page.platform))] as Platform[];
+    // BL-A-6: narrow scopeFieldStates platforms by the requested person's platform.
+    const platforms: Platform[] = [params.platform];
 
     // Two gates, and each one decides whether a QUERY RUNS, not merely whether
     // its result is hidden. Money is money; notes and summaries are operator-written
@@ -623,7 +647,9 @@ export async function handleAgentPerson(
           : null,
         mayReadMoney ? await loadAgentPersonSubscriptions(tx, { pageIds, fanId }) : null,
         mayReadMessages ? await loadAgentPersonCrm(tx, { pageIds, fanId }) : null,
-        mayReadMessages ? await listAgentFanThreads(tx, { pageIds, fanIds: [fanId] }) : null,
+        mayReadMessages
+          ? await listAgentFanThreads(tx, { pageIds, fanIds: [fanId], includeLifetimeSpend: mayReadMoney })
+          : null,
       ] as const, "agent_person_bundle");
     const postTipParseDebt = mayReadMoney
       ? await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
@@ -759,37 +785,42 @@ export async function handleAgentPerson(
         pageAlias: membership.pageAlias,
       })),
       // null, not []: an empty array would say "this fan has no threads".
-      threads: threads === null ? null : threads.rows.map((thread) => ({
-        pageLabel: thread.pageLabel,
-        platform: thread.platform as Platform,
-        conversationRef: thread.conversationRef,
-        fanPlatformUserId: identity.row?.platformUserId ?? null,
-        fanUsername: identity.row?.username ?? null,
-        fanDisplayName: identity.row?.displayName ?? null,
-        isVisible: true,
-        unreadCount: null,
-        lastMessageAt: null,
-        lastFanMessageAt: null,
-        lastModelMessageAt: null,
-        storedMessageCount: thread.storedMessageCount,
-        oldestStoredMessageRef: null,
-        newestStoredMessageRef: null,
-        messageCoverageStatusRaw: thread.coverageStatusRaw as "complete",
-        lastMessageSyncAt: null,
-        breakerOpen: false,
-        quarantineUntil: null,
-        captureFloor: threadCaptureFloor(thread.coverage),
-        ...threadCoverage(thread.coverage),
-        transcriptWillReturnRows: thread.storedMessageCount > 0,
-        hydrationRemedy: hydrationRemedy(scope),
-        retentionLimit: retentionLimitFor(thread.platform as Platform, null),
-        fieldStates: {},
-        provenance: {
-          ingestPaths: ["unknown" as const],
-          convergence: "no_material_lane" as const,
-          observationRef: null,
-        },
-      })),
+      // BL-A-1: populate real thread visibility, sync/message timestamps, breaker
+      // quarantine, and spend-aware retention limit from `listAgentFanThreads`.
+      threads: threads === null ? null : threads.rows.map((thread) => {
+        const quarantineMs = thread.quarantineUntil?.getTime() ?? null;
+        return {
+          pageLabel: thread.pageLabel,
+          platform: thread.platform as Platform,
+          conversationRef: thread.conversationRef,
+          fanPlatformUserId: identity.row?.platformUserId ?? null,
+          fanUsername: identity.row?.username ?? null,
+          fanDisplayName: identity.row?.displayName ?? null,
+          isVisible: thread.isVisible,
+          unreadCount: thread.unreadCount,
+          lastMessageAt: isoOrNull(thread.lastMessageAt),
+          lastFanMessageAt: isoOrNull(thread.lastFanMessageAt),
+          lastModelMessageAt: isoOrNull(thread.lastModelMessageAt),
+          storedMessageCount: thread.storedMessageCount,
+          oldestStoredMessageRef: thread.oldestStoredMessageRef,
+          newestStoredMessageRef: thread.newestStoredMessageRef,
+          messageCoverageStatusRaw: thread.coverageStatusRaw as "complete",
+          lastMessageSyncAt: isoOrNull(thread.lastMessageSyncAt),
+          breakerOpen: quarantineMs !== null && quarantineMs > Date.now(),
+          quarantineUntil: isoOrNull(thread.quarantineUntil),
+          captureFloor: threadCaptureFloor(thread.coverage),
+          ...threadCoverage(thread.coverage),
+          transcriptWillReturnRows: thread.storedMessageCount > 0,
+          hydrationRemedy: hydrationRemedy(scope),
+          retentionLimit: retentionLimitFor(thread.platform as Platform, thread.lifetimeSpendMills),
+          fieldStates: {},
+          provenance: {
+            ingestPaths: ["unknown" as const],
+            convergence: "no_material_lane" as const,
+            observationRef: null,
+          },
+        };
+      }),
       // null, not a zeroed section: a silent 0 is indistinguishable from
       // "never paid", and that is the one thing money must never say by accident.
       money: money === null ? null : {

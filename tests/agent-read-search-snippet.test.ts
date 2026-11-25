@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { agentSearchLocatorSchema } from "@agency_hub_core/contracts";
-import { AGENT_SEARCH_SNIPPET_MAX_LENGTH, searchAgentArchive } from "@agency_hub_core/db";
+import { AGENT_SEARCH_SNIPPET_MAX_LENGTH, extractSearchSnippetTerms, searchAgentArchive } from "@agency_hub_core/db";
 import { countLoneSurrogatesDeep } from "@agency_hub_core/shared";
 
 // Prod, 2026-10-11: `hub search --snippet` answered 500 "Response validation
@@ -85,5 +85,14 @@ describe("#7 search: a snippet fits the contract whatever the window holds", () 
   it("a short snippet and a withheld one pass through untouched", async () => {
     const { rows } = await searchAgentArchive(stubDb(["nice dress 😍", null]), input);
     expect(rows.map((row) => row.snippet)).toEqual(["nice dress 😍", null]);
+  });
+
+  it("extractSearchSnippetTerms splits multi-word websearch queries and skips negations/OR (BL-A-8)", () => {
+    expect(extractSearchSnippetTerms('red dress OR "blue coat" -excluded')).toEqual([
+      "red",
+      "dress",
+      "blue",
+      "coat",
+    ]);
   });
 });
