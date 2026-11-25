@@ -8,8 +8,10 @@ import {
 import {
   listActiveSaleDecisions,
   listCurrentHandinVersions,
+  listCurrentReportsOfSales,
   listHandinsOfShifts,
   listLoginPeople,
+  listSaleClaims,
   listSaleFacts,
   listSaleLastWriters,
   listShiftRows,
@@ -22,6 +24,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { SALE_LAST_WRITER_HOURS, dayOfWork, lastWriterQuery, readPeopleWork, workHoldsSale, type ComputedWork } from "./chatter-shifts.ts";
+import { ruleMarksOf, type ClaimView, type ReportView } from "./sale-claim-rules.ts";
 import { saleKindOf } from "./sale-kinds.ts";
 import { reportDateOfShift } from "./shift-rows.ts";
 
@@ -78,9 +81,19 @@ export function workReportDateOf(input: {
 /** A sale's decision as the facts carry it: a split's shares are the owner's `resolution`; any kind is `decision`. */
 function decided(
   decision: { kind: string; shares: ReadonlyArray<{ userId: number; percent: number }>; pot: string | null } | undefined,
+  normalizeUser: (userId: number) => number,
 ): Pick<AgentTeamSale, "resolution" | "decision"> {
   if (decision === undefined || (decision.kind !== "split" && decision.kind !== "nobody" && decision.kind !== "pot")) return { resolution: null, decision: null };
-  const resolution = decision.kind === "split" ? decision.shares.filter((share) => share.percent > 0).map((share) => ({ userId: share.userId, percent: share.percent })) : null;
+  let resolution: AgentTeamSale["resolution"] = null;
+  if (decision.kind === "split") {
+    const merged = new Map<number, number>();
+    for (const share of decision.shares) {
+      if (share.percent <= 0) continue;
+      const userId = normalizeUser(share.userId);
+      merged.set(userId, (merged.get(userId) ?? 0) + share.percent);
+    }
+    resolution = [...merged.entries()].map(([userId, percent]) => ({ userId, percent }));
+  }
   return { resolution, decision: { kind: decision.kind, pot: decision.kind === "pot" ? decision.pot : null } };
 }
 
@@ -106,6 +119,12 @@ export async function readAgentTeamSales(
   // Hub's own decisions of the sales (review R2b-5): the one home of «чья продажа» — the owner's disputes, the ones
   // carried over from the ledger and the ones recorded «со слов» — reach the ledger's rule here.
   const decisions = await listActiveSaleDecisions(db, ids);
+  const reports = await listCurrentReportsOfSales(db, ids);
+  const claims = await listSaleClaims(db, { transactionIds: ids });
+  const reportViews: ReportView[] = reports.map((report) => ({
+    handinId: report.handinId, shiftId: report.shiftId, userId: report.userId, version: report.version, submittedAt: report.submittedAt.getTime(), lines: report.lines,
+  }));
+  const marksBySale = ruleMarksOf({ reports: reportViews, claims: claims as readonly ClaimView[] });
   const factOf = new Map(facts.map((fact) => [fact.transactionId, fact]));
 
   const allWorks = [...people].flatMap(([userId, person]) => person.work.map((work) => ({ userId, username: person.username, work })));
@@ -113,6 +132,17 @@ export async function readAgentTeamSales(
   const roles = await listUserRoles(db, [...new Set([...allWorks.map((one) => one.userId), ...senders])]);
   const loginPeople = await listLoginPeople(db, input.realm ?? "live");
   const personCodeOf = new Map(loginPeople.map((row) => [row.userId, row.personCode]));
+  // Normalize deactivated logins in exported decisions/marks to the person's active login (OA-004).
+  const activeLoginOfPerson = new Map<number, number>();
+  for (const row of loginPeople) {
+    if (row.personId !== null && row.live && !activeLoginOfPerson.has(row.personId)) activeLoginOfPerson.set(row.personId, row.userId);
+  }
+  const loginRowOf = new Map(loginPeople.map((row) => [row.userId, row]));
+  const normalizeUser = (userId: number): number => {
+    const row = loginRowOf.get(userId);
+    if (row === undefined || row.live || row.personId === null) return userId;
+    return activeLoginOfPerson.get(row.personId) ?? userId;
+  };
   const shiftRows = allWorks.some((one) => one.work.kind === "shift")
     ? await listShiftRows(db, { from: new Date(workFrom.getTime() - DAY_MS), to: new Date(workTo.getTime() + DAY_MS) })
     : [];
@@ -164,9 +194,17 @@ export async function readAgentTeamSales(
       campaign: fact?.campaign ?? false,
       lastWriterUserId: lastWriter,
       writers: fact?.writers ?? [],
-      // Kept for the ledger, which parses it: Hub's marks flow is gone, and the tables that held it are read no more.
-      marks: [],
-      ...decided(decisions.get(sale.transactionId)),
+      // Export confirmed chatter statements and mutual agreements (`not_mine` + `agreed`, OA-005).
+      marks: (marksBySale.get(sale.transactionId) ?? [])
+        .filter((mark) => mark.confirmed)
+        .map((mark) => ({
+          userId: normalizeUser(mark.userId),
+          mark: mark.mark,
+          shareWithUserId: mark.shareWith === null ? null : normalizeUser(mark.shareWith),
+          amountMills: mark.ownAmountMills,
+          confirmed: true,
+        })),
+      ...decided(decisions.get(sale.transactionId), normalizeUser),
     };
   });
 

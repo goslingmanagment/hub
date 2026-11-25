@@ -321,6 +321,28 @@ describe("expected reviewer snapshot at hand-in (OA-002)", () => {
     expect(checks.checks.map((one) => one.candidateId)).not.toContain(candId);
   });
 
+  it("does not assign an agent with review:shift_reports capability unless it explicitly holds reviews_shift_reports right (OA-002)", async (context) => {
+    if (!testDb) return context.skip();
+    await revokeAllReviewerKeys();
+
+    const tokUnassigned = `${AGENT_KEY_TOKEN_PREFIX}er-unassigned-key`;
+    const unassigned = await insertReviewerAgentKey(testDb.db, {
+      name: "er-unassigned", token: tokUnassigned, pageIds: [pageMia], createdBy: users.boss!, agentCode: "unassigned-rev", assignedReviewer: false,
+    });
+    const shift1 = await insertShift(["mia-1"], 15, 14);
+    const handed1 = shiftReportResponseSchema.parse((await asSession("anna", "POST", `/api/v1/shift-reports/${shift1}/submit`)).json());
+    expect(handed1.board?.phase).toBe("confirm");
+    expect(handed1.board?.candidate?.gengar.state).toBe("idle");
+    expect((await candidateRow(handed1.board!.candidate!.id)).expectedReviewerPersonId).toBeNull();
+
+    // Granting `reviews_shift_reports` explicitly assigns this agent as expected reviewer for subsequent hand-ins.
+    await q("insert into person_rights (person_id, \"right\") values ($1, 'reviews_shift_reports') on conflict do nothing", [unassigned.personId]);
+    const shift2 = await insertShift(["mia-1"], 13, 12);
+    const handed2 = shiftReportResponseSchema.parse((await asSession("anna", "POST", `/api/v1/shift-reports/${shift2}/submit`)).json());
+    expect(handed2.board?.phase).toBe("checking");
+    expect((await candidateRow(handed2.board!.candidate!.id)).expectedReviewerPersonId).toBe(unassigned.personId);
+  });
+
   it("picks alphabetically first reviewer by people.code with a warning when multiple cover all pages, and refuses others in the tx", async (context) => {
     if (!testDb) return context.skip();
     await revokeAllReviewerKeys();

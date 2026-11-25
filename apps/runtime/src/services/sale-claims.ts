@@ -8,7 +8,7 @@ import type {
   ShiftReportClaim,
   ShiftReportLineFacts,
 } from "@agency_hub_core/contracts";
-import { personNameForms } from "@agency_hub_core/contracts";
+import { personNameForms, SALE_NOBODY_KEEP_MAX } from "@agency_hub_core/contracts";
 import { formatUsdFromMills, moscowDayOfMs as moscowDay } from "@agency_hub_core/shared";
 import {
   ensureHandin,
@@ -148,6 +148,21 @@ export const SALE_DISPUTE_KIND = "sale.dispute";
 export const SALE_NOBODY_WEEK_KIND = "sale.nobody_week";
 export const OFF_PLATFORM_PENDING_KIND = "off_platform.pending";
 export const SALE_DECISIONS_UNLINKED_KIND = "sale.decisions.unlinked";
+export const SALE_DELIVERY_DECLINED_KIND = "sale.delivery_declined";
+
+export const saleDeliveryDeclinedKey = (decisionId: number, recipientUserId: number) =>
+  `${SALE_DELIVERY_DECLINED_KIND}:${decisionId}:${recipientUserId}`;
+
+/** Closes any open owner matters raised when a recipient declined an «Отдать» delivery for the given decision(s). */
+export async function closeDeclinedDeliveryMatters(db: Database, decisionIds: readonly number[], now: Date): Promise<void> {
+  const unique = [...new Set(decisionIds)];
+  if (unique.length === 0) return;
+  const prefixes = unique.map((id) => `${SALE_DELIVERY_DECLINED_KIND}:${id}:`);
+  for (const matter of await listOpenMattersOfKinds(db, [SALE_DELIVERY_DECLINED_KIND])) {
+    if (!prefixes.some((prefix) => matter.key.startsWith(prefix))) continue;
+    await closeMatter(db, { key: matter.key, how: "resolved", writer: "server" }, SYSTEM, now);
+  }
+}
 
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
@@ -877,9 +892,19 @@ function refreshClock(now: Date): () => Date {
  * when what follows in it reads the home (a cancel: the reports go back to the rule's home, so it is computed first and
  * a failure fails the cancel whole).
  */
-async function refreshHomeWithin(db: Database, occurredAt: Date | null, now: Date | (() => Date)): Promise<void> {
+async function refreshHomeWithin(
+  db: Database,
+  occurredAt: Date | null,
+  now: Date | (() => Date),
+  options?: { deferPots?: boolean },
+): Promise<void> {
   if (occurredAt === null || occurredAt.getTime() < SALE_RULE.since) return;
-  await refreshSaleHomesForDay(db, moscowDay(occurredAt.getTime()), typeof now === "function" ? now : refreshClock(now));
+  await refreshSaleHomesForDay(
+    db,
+    moscowDay(occurredAt.getTime()),
+    typeof now === "function" ? now : refreshClock(now),
+    options,
+  );
 }
 
 /** The sale's Moscow day computed again after a commit: its home follows the agreement or the decision at once. */
@@ -1156,7 +1181,8 @@ async function takeToRuleWithin(
   const held = (await listCurrentReportsOfSales(txDb, [transactionId]))
     .some((report) => report.lines.some((line) => line.transactionId === transactionId && input.holds(line)));
   if (!held) return [];
-  await refreshHomeWithin(txDb, (await listHandinSalesByIds(txDb, [transactionId]))[0]?.occurredAt ?? null, input.now);
+  // Defer pot reconciliation until post-commit refresh so we never invert lock order with `workboard_pots`.
+  await refreshHomeWithin(txDb, (await listHandinSalesByIds(txDb, [transactionId]))[0]?.occurredAt ?? null, input.now, { deferPots: true });
   return reportsBackToDraft(txDb, {
     transactionId, holds: input.holds, madeFor: { kind: "claim", claimId: take.id, transactionId, outcome: input.outcome }, by: input.by, paid: input.paid, at: input.now,
   });
@@ -1435,11 +1461,13 @@ export async function decideSaleDispute(
       for (const claim of closing) {
         if (!await updateSaleClaim(txDb, claim.id, { state: "decided", closedAt: now }, now, { ifState: claim.state })) throw stale();
       }
-      await refreshHomeWithin(txDb, now_.sale?.occurredAt ?? null, now);
+      // Defer pot reconciliation until post-commit refresh so we never invert lock order with `workboard_pots`.
+      await refreshHomeWithin(txDb, now_.sale?.occurredAt ?? null, now, { deferPots: true });
       made.push(...await reportsBackToDraft(txDb, {
         transactionId, holds: () => true, madeFor: { kind: "claim", claimId: (closing[0] ?? open[0]!).id, transactionId, outcome: "rule" }, by, paid, at: now,
       }));
     });
+    await refreshHomeOf(app, now_.sale?.occurredAt ?? null, now);
     await afterPaid(app, made, now);
     await runSaleClaims(app, now).catch(() => undefined);
     return { decided: false, versions: made.map((one) => ({ shiftId: one.shiftId, version: one.version })), savedAt: now.toISOString() };
@@ -1549,12 +1577,15 @@ export async function applySaleDecision(
     const txDb = tx as unknown as Database;
     await lockSaleSettlements(txDb);
     const also = (await input.first?.(txDb)) ?? {};
+    const replacedIds = [...(await listActiveSaleDecisions(txDb, [transactionId])).values()].map((one) => one.id);
+    if (also.supersedes != null) replacedIds.push(also.supersedes);
     const saved = await insertSaleDecision(txDb, { ...input.insert, transactionId, pageId: sale?.pageId ?? null, ruleHome: sale?.home?.home ?? null }, now);
     decisionId = saved?.id ?? null;
     if (saved !== null) await scheduleSaleDeliveries(txDb, saved);
     if (also.supersedes != null && !(await supersedeSaleDecision(txDb, { id: also.supersedes, at: now }))) {
       throw new ConflictError("The decision it replaces is not active", { reason: "not_active" });
     }
+    await closeDeclinedDeliveryMatters(txDb, replacedIds, now);
     made.push(...await followDecision(txDb, {
       transactionId, decisionId, decision: { kind: input.insert.kind, shares: input.insert.shares }, answers: also.answers ?? null,
       madeFor: input.madeFor(decisionId), by: input.by, at: now, paid, saleNet: sale?.netMills ?? 0,
@@ -1720,6 +1751,7 @@ export async function cancelSaleDecisionApplied(
     if (!(await cancelSaleDecision(txDb, { id: decision.id, note: input.note, at: now }))) {
       throw new ConflictError("Only an active decision is cancelled", { reason: "not_active" });
     }
+    await closeDeclinedDeliveryMatters(txDb, [decision.id], now);
     const unruled = saleId !== null && !(await listActiveSaleDecisions(txDb, [saleId])).has(saleId);
     // What a decision closed and nothing decides now: the claims and questions of the sale, when no decision rules it
     // (also the ones a decision this one had replaced closed), and a question with no sale that this one answered.
@@ -2061,6 +2093,7 @@ export async function keepSalesNobody(app: ClaimsApp, principal: HumanAuthPrinci
   requireOwnerSession(principal);
   if (!input.transactionIds?.length) throw new BadRequestError("Select at least one sale");
   const ids = [...new Set(input.transactionIds)];
+  if (ids.length > SALE_NOBODY_KEEP_MAX) throw new BadRequestError(`At most ${SALE_NOBODY_KEEP_MAX} sales per request`);
   const realm = realmOf(principal);
   const eligible = await listOpenUnownedSales(app.db, { since: new Date(SALE_RULE.since), realm, transactionIds: ids });
   if (eligible.length !== ids.length) throw new ConflictError("Обновите список ничьих продаж", { reason: "already_decided" });
@@ -2069,7 +2102,8 @@ export async function keepSalesNobody(app: ClaimsApp, principal: HumanAuthPrinci
   await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     await lockSaleSettlements(db);
-    const sales = await openNobodySales(db, realm, ids);
+    const sales = (await openNobodySales(db, realm, ids))
+      .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime() || a.transactionId - b.transactionId);
     if (sales.length !== ids.length) {
       throw new ConflictError("Часть продаж уже решена или оспорена: обновите список", { reason: "already_decided" });
     }
@@ -2168,13 +2202,18 @@ export async function linkUnlinkedDecision(
     const txDb = tx as unknown as Database;
     await lockSaleSettlements(txDb);
     const { sale, decision } = await readPair(txDb);
-    if ((await listActiveSaleDecisions(txDb, [sale.transactionId])).size > 0) {
-      throw new ConflictError("The sale already has an active decision", { reason: "decision_exists" });
-    }
     if ((await listSaleClaims(txDb, { transactionIds: [sale.transactionId], states: ["owner", "asked"], limit: 1 })).length > 0) {
       throw new ConflictError("The sale already has a claim", { reason: "open_dispute" });
     }
+    const existing = await listActiveSaleDecisions(txDb, [sale.transactionId]);
+    const replacedIds: number[] = [];
+    for (const active of existing.values()) {
+      await supersedeSaleDecision(txDb, { id: active.id, at: now });
+      replacedIds.push(active.id);
+    }
+    await closeDeclinedDeliveryMatters(txDb, replacedIds, now);
     if (!(await linkSaleDecision(txDb, { id: input.decisionId, transactionId: sale.transactionId, pageId: sale.pageId, at: now }))) return false;
+    await scheduleSaleDeliveries(txDb, { ...decision, transactionId: sale.transactionId, pageId: sale.pageId });
     made.push(...await followDecision(txDb, {
       transactionId: sale.transactionId, decisionId: decision.id, decision,
       madeFor: { kind: "decision", decisionId: decision.id, transactionId: sale.transactionId, outcome: "said" },

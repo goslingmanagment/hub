@@ -421,10 +421,12 @@ describe("the owner's agent door, part 2", () => {
     const row = (await q("select transaction_id, needs_link from sale_owner_decisions where id = $1", [decision.id])).rows[0];
     expect([Number(row.transaction_id), row.needs_link]).toEqual([liveSale, false]);
     const second = await imported(pageOne, "fixture-obsolete-label");
-    const occupied = await call("decision.link", { decisionId: second.id, transactionId: liveSale });
-    expect([occupied.statusCode, occupied.json().reason]).toEqual([409, "decision_exists"]);
-    expect((await q("select state, needs_link from sale_owner_decisions where id = $1", [second.id])).rows).toEqual([{ state: "active", needs_link: true }]);
-    expect((await q("select id::int from sale_owner_decisions where transaction_id = $1 and state = 'active'", [liveSale])).rows).toEqual([{ id: decision.id }]);
-    expect((await call("decision.link", { decisionId: decision.id, transactionId: liveSale })).statusCode).toBe(404);
+    const replaced = await call("decision.link", { decisionId: second.id, transactionId: liveSale });
+    expect(replaced.statusCode, replaced.body).toBe(200);
+    expect(replaced.json().result.linked).toBe(true);
+    expect((await q("select state, needs_link from sale_owner_decisions where id = $1", [second.id])).rows).toEqual([{ state: "active", needs_link: false }]);
+    expect((await q("select state from sale_owner_decisions where id = $1", [decision.id])).rows).toEqual([{ state: "superseded" }]);
+    expect((await q("select id::int from sale_owner_decisions where transaction_id = $1 and state = 'active'", [liveSale])).rows).toEqual([{ id: second.id }]);
+    expect((await call("decision.link", { decisionId: second.id, transactionId: liveSale })).statusCode).toBe(404);
   });
 });

@@ -36,7 +36,7 @@ import { recordOwnerWrite, type OperatorContext } from "./auth.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { blockerMoscowDay, payoutSaleBlockers, type PayoutSaleBlockerItem, type SaleBlockerCoverage } from "./payout-sale-blockers.ts";
 import { validatePotDecisionTarget } from "./pots.ts";
-import { applySaleDecision, cancelSaleDecisionApplied, runSaleClaims } from "./sale-claims.ts";
+import { applySaleDecision, cancelSaleDecisionApplied, closeDeclinedDeliveryMatters, runSaleClaims } from "./sale-claims.ts";
 
 /**
  * «Чья продажа» «со слов» (review R2b-3): the agent's door for what the team's chat agent records — a decision about a
@@ -329,6 +329,7 @@ export async function recordSaleDecision(
       if (also.supersedes !== null && !(await supersedeSaleDecision(txDb, { id: also.supersedes, at: now }))) {
         throw new ConflictError("The decision it replaces is not active", { reason: "not_active" });
       }
+      if (also.supersedes !== null) await closeDeclinedDeliveryMatters(txDb, [also.supersedes], now);
       if (also.answers !== null) await updateSaleClaim(txDb, also.answers, { state: "decided", decisionId, closedAt: now }, now);
     });
     await runSaleClaims(app, now).catch(() => undefined);

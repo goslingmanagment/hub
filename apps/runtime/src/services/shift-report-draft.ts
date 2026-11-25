@@ -5,6 +5,7 @@ import {
   findHandinPersonOfUser,
   findHandinShift,
   findPersonRowByCode,
+  isTestUser,
   listActiveSaleDecisions,
   listHandinLastWrites,
   listHandinMarks,
@@ -44,6 +45,7 @@ import type { AppContext } from "../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
 import { ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { readLedgerPayouts } from "./ledger-payouts.ts";
+import { soloPagesForPerson } from "./page-workers.ts";
 import { settledShareOf } from "./sale-claim-rules.ts";
 import { SALE_RULE, slotRuns, type RuleSlot, type SaleHomeKind, type SaleHomeReason } from "./sale-rule.ts";
 import { computeSaleHomes, registrySlots, ruleWorksOf } from "./sale-homes.ts";
@@ -306,8 +308,27 @@ export async function draftFacts(
   const slotProvider = registrySlots(db);
   const slots = await slotProvider.slotsFor({ from: new Date(shift.startedAt.getTime() - 2 * DAY_MS), to: new Date(shiftEnd + DAY_MS) });
   const window = await reportWindowOf(db, subject, slots, catalog, shiftEnd);
-  const from = new Date(window.from);
-  const to = new Date(Math.max(window.to, shiftEnd));
+  // On a solo page (exact 1 active worker on the report day), expose all sales of that 24h Moscow day in «Рядом»
+  // (default $0 -> stays nobody unless the chatter marks «моё»).
+  const soloPageLabels = new Set<string>();
+  const reportDayStart = Date.parse(`${shift.reportDate}T00:00:00+03:00`);
+  const reportDayEnd = reportDayStart + DAY_MS;
+  if (subject.person !== null && !Number.isNaN(reportDayStart)) {
+    const candidatePageIds = [...new Set([...window.pages, ...shiftPageLabels(shift)]
+      .map((label) => catalog.idOf.get(label))
+      .filter((id): id is number => id !== undefined))];
+    if (candidatePageIds.length > 0) {
+      const realm = (await isTestUser(db, shift.userId)) ? "test" : "live";
+      const soloIds = await soloPagesForPerson(db, realm, subject.person.personId, shift.reportDate, candidatePageIds);
+      for (const pageId of soloIds) {
+        const label = catalog.labelOf.get(pageId);
+        if (label !== undefined) soloPageLabels.add(label);
+      }
+    }
+  }
+  const hasSoloPages = soloPageLabels.size > 0;
+  const from = new Date(hasSoloPages ? Math.min(window.from, reportDayStart) : window.from);
+  const to = new Date(hasSoloPages ? Math.max(window.to, shiftEnd, Math.min(reportDayEnd, now.getTime())) : Math.max(window.to, shiftEnd));
   const live = await computeSaleHomes(db, { from, to, now, slots: slotProvider });
   const works = ruleWorksOf(live.answer.works);
   const workRef = shiftWorkRef(works, subject, shiftEnd);
@@ -349,7 +370,8 @@ export async function draftFacts(
       ppvSenderUserId: sale.ppvSender?.userId ?? null,
       source: "window",
       heldByShift: workRef !== null && sale.holders.includes(workRef),
-      inReportWindow: window.pages.has(sale.pageLabel) && at >= window.from && at < window.to,
+      inReportWindow: (window.pages.has(sale.pageLabel) && at >= window.from && at < window.to)
+        || (hasSoloPages && soloPageLabels.has(sale.pageLabel) && at >= reportDayStart && at < reportDayEnd),
     };
   });
 
@@ -389,8 +411,9 @@ export async function draftFacts(
     ? await listRecipientOpenShifts(db, { userIds: subject.userIds }) : [];
   const landingShiftFor = (delivery: typeof deliveries[number], occurredAt: Date): number | null => {
     if (delivery.shiftId !== null || delivery.state !== "pending") return delivery.shiftId;
-    const day = moscowDayOfMs(occurredAt.getTime());
-    return openShifts.find((one) => one.reportDate >= day)?.shiftId ?? null;
+    const at = occurredAt.getTime();
+    const day = moscowDayOfMs(at);
+    return openShifts.find((one) => one.reportDate >= day || (at >= one.startedAt.getTime() && at <= one.endedAt.getTime()))?.shiftId ?? null;
   };
 
   const unavailableDeliveries = new Set<number>();
@@ -415,7 +438,7 @@ export async function draftFacts(
   const switchOnAt = subject.person?.submitsShiftSince?.getTime() ?? null;
   // The sales the person's words here say «не моё» of: each stays their own line (shift-handin-rules.ts).
   const notMine = new Set(marks.filter((mark) => mark.statement === "not_mine").map((mark) => mark.transactionId));
-  const context = { shiftId: shift.id, workRef, userIds: new Set(subject.userIds), switchOnAt, submittedShiftIds, reported, handinId: handin?.id ?? null, notMine };
+  const context = { shiftId: shift.id, workRef, userIds: new Set(subject.userIds), switchOnAt, submittedShiftIds, reported, handinId: handin?.id ?? null, notMine, soloPages: soloPageLabels };
 
   const classified: ClassifiedSale[] = [];
   const seen = new Set<number>();

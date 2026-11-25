@@ -18,6 +18,7 @@ import {
   listHandinPeopleOfUsers,
   listHandinSalesByIds,
   listSaleClaims,
+  listSaleDeliveries,
   readPotsSwitch,
   shiftOfUsersHoldsSale,
   type CurrentReport,
@@ -210,23 +211,25 @@ export function reportHoldingSale(reports: readonly CurrentReport[], logins: rea
 }
 
 /**
- * The report day of a person's share in the chain: the handed-in Hub version's date first; else the owner's decision's
- * `appliedReportDate` (when it names this person or no specific login); else the shift's report date; else the sale's
- * Moscow day. Pure.
+ * The report day of a person's share in the chain: the handed-in Hub version's date first; else that person's applied
+ * delivery date (`sale_decision_deliveries`); else the owner's decision's legacy `appliedReportDate` (when it names
+ * this person or no specific login); else the shift's report date; else the sale's Moscow day. Pure.
  */
 export function chainReportDateOf(input: {
   handedIn: Pick<CurrentReport, "reportDate"> | null;
   decision: Pick<SaleDecisionRow, "appliedReportDate" | "appliedUserId"> | null;
+  deliveries?: ReadonlyArray<{ recipient: number; state: "pending" | "applied" | "declined"; reportDate: string | null }>;
   logins: readonly number[];
   shift: Pick<HandinShift, "reportDate"> | null;
   occurredAt: Date;
 }): string {
+  const delivered = input.deliveries?.find((one) => one.state === "applied" && one.reportDate !== null && input.logins.includes(one.recipient))?.reportDate ?? null;
   const applied = input.decision !== null
     && input.decision.appliedReportDate !== null
     && (input.decision.appliedUserId === null || input.logins.includes(input.decision.appliedUserId))
     ? input.decision.appliedReportDate
     : null;
-  return input.handedIn?.reportDate ?? applied ?? input.shift?.reportDate ?? moscowDayOf(input.occurredAt);
+  return input.handedIn?.reportDate ?? delivered ?? applied ?? input.shift?.reportDate ?? moscowDayOf(input.occurredAt);
 }
 
 /** The ledger's report day, exact model and `basis` for the sale's page from `readReports(reportDate)`. Pure. */
@@ -505,9 +508,9 @@ export async function readSaleChain(
     const mine = (id2: number | null) => id2 !== null && ownLogins.includes(id2);
     const hasOwnLineOrClaim = reports.some((report) => mine(report.userId))
       || claims.some((claim) => mine(claim.claimantUserId) || mine(claim.sideUserId));
-    // Nobody's sales are hidden from chatters and team leads (H8), unless they already have their own handed-in line
-    // or non-withdrawn claim referencing this sale.
-    if (isTeamHiddenSaleHome(sale.home?.home)) {
+    // Nobody's sales and fresh uncomputed post-rule sales (`home IS NULL`) are hidden from chatters and team leads
+    // (H8 / fail-closed), unless they already have their own handed-in line or non-withdrawn claim referencing this sale.
+    if (isTeamHiddenSaleHome(sale.home?.home) || (sale.home === null && sale.occurredAt.getTime() >= SALE_RULE.since)) {
       if (!hasOwnLineOrClaim) throw notFound();
     } else if (viewer.kind === "chatter") {
       const involved = people.some(mine)
@@ -518,6 +521,7 @@ export async function readSaleChain(
   }
 
   const decision = (await listActiveSaleDecisions(db, [sale.transactionId])).get(sale.transactionId) ?? null;
+  const deliveries = decision === null ? [] : await listSaleDeliveries(db, { decisionIds: [decision.id] });
   const names = await listHandinNames(db, [...people, ...claims.flatMap((claim) => [claim.claimantUserId, claim.sideUserId].filter((one): one is number => one !== null)),
     ...(decision?.shares.map((share) => share.userId) ?? [])]);
   const home = homeLinkOf({ sale, names, decision, claims, ownerReads: viewer.kind === "owner" });
@@ -554,7 +558,7 @@ export async function readSaleChain(
     const logins = person?.userIds ?? [userId];
     // Отчёт: Hub's handed-in version holding the sale first, else the ledger's report of the day.
     const handedIn = reportHoldingSale(reports, logins, sale.transactionId);
-    const reportDate = chainReportDateOf({ handedIn, decision, logins, shift, occurredAt: sale.occurredAt });
+    const reportDate = chainReportDateOf({ handedIn, decision, deliveries, logins, shift, occurredAt: sale.occurredAt });
     let report: SaleChainLink;
     let model: string | null = null;
     let basis: string | null = null;

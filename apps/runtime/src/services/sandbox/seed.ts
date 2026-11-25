@@ -795,16 +795,22 @@ export async function seedSandbox(app: AppContext, input: SandboxSeedInput): Pro
 
 async function ensureChecker(app: AppContext): Promise<{ personId: number; created: boolean }> {
   const found = await findPersonRowByCode(app.db, SANDBOX_CHECKER.code);
+  let personId: number;
+  let created = false;
   if (found !== null) {
     if (!found.isTest) throw new SandboxSeedRefused(`A live person has the code «${SANDBOX_CHECKER.code}»: nothing written`);
-    return { personId: found.id, created: false };
+    personId = found.id;
+  } else {
+    const person = await insertPersonRow(app.db, {
+      code: SANDBOX_CHECKER.code, displayName: SANDBOX_CHECKER.displayName, kind: "agent", role: "agent", state: "working",
+      leftOn: null, telegramUserId: null, telegramHandle: null, reportTag: null, onboarding: [],
+      note: "Тестовая команда (sandbox:seed): играет Генгара", importNotes: [], origin: "owner", createdByUserId: null, isTest: true,
+    });
+    personId = person.id;
+    created = true;
   }
-  const person = await insertPersonRow(app.db, {
-    code: SANDBOX_CHECKER.code, displayName: SANDBOX_CHECKER.displayName, kind: "agent", role: "agent", state: "working",
-    leftOn: null, telegramUserId: null, telegramHandle: null, reportTag: null, onboarding: [],
-    note: "Тестовая команда (sandbox:seed): играет Генгара", importNotes: [], origin: "owner", createdByUserId: null, isTest: true,
-  });
-  return { personId: person.id, created: true };
+  await app.db.execute(sql`insert into person_rights (person_id, "right") values (${personId}, 'reviews_shift_reports') on conflict do nothing`);
+  return { personId, created };
 }
 
 async function liveCheckerKey(db: Database, personId: number): Promise<{ id: number; capabilities: string[]; pageIds: number[] } | null> {

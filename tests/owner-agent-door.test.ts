@@ -203,7 +203,8 @@ describe("the owner's reason", () => {
     expect(ownerReasonOf(encodeURIComponent("я".repeat(500)))).toHaveLength(500);
     expect(() => ownerReasonOf(encodeURIComponent("я".repeat(501)))).toThrow(/500/);
     expect(() => ownerReasonOf("%E0%A4%A")).toThrow(/percent-encoded/);
-    for (const hidden of ["\n", "\u200b", "\u202e", "\ufeff"]) {
+    expect(ownerReasonOf(encodeURIComponent("первая строка\nвторая\r\n\tтретья"))).toBe("первая строка вторая третья");
+    for (const hidden of ["\u0000", "\u0007", "\u200b", "\u202e", "\ufeff"]) {
       expect(() => ownerReasonOf(encodeURIComponent(`${hidden}fixture`))).toThrow(/x-hub-owner-reason/);
     }
   });

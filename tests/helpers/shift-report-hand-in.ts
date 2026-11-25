@@ -1,5 +1,5 @@
 import { shiftReportConfirmResponseSchema, shiftReportResponseSchema, type ShiftReportResponse } from "@agency_hub_core/contracts";
-import { findPersonRowByCode, insertAgentKey, insertPersonAgentKey, insertPersonRow, type Database } from "@agency_hub_core/db";
+import { findPersonRowByCode, insertAgentKey, insertPersonAgentKey, insertPersonRow, listPersonRightRows, replacePersonRights, type Database } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 import { expect } from "vitest";
 
@@ -22,6 +22,8 @@ export async function insertReviewerAgentKey(
     capabilities?: string[];
     expiresAt?: Date;
     isTest?: boolean;
+    /** Grants `reviews_shift_reports` right (default true). Pass false to test capability-only unassigned agents. */
+    assignedReviewer?: boolean;
   },
 ): Promise<{ agentKeyId: number; personId: number }> {
   const code = input.agentCode ?? "reviewer-agent";
@@ -31,6 +33,12 @@ export async function insertReviewerAgentKey(
     telegramHandle: null, reportTag: null, onboarding: [], note: null, importNotes: [], origin: "owner",
     createdByUserId: input.createdBy, ...(input.isTest === true ? { isTest: true } : {}),
   });
+  if (input.assignedReviewer !== false) {
+    const existingRights = (await listPersonRightRows(db, [person.id])).map((r) => r.right);
+    if (!existingRights.includes("reviews_shift_reports")) {
+      await replacePersonRights(db, person.id, [...existingRights, "reviews_shift_reports"], input.createdBy);
+    }
+  }
   const key = await insertAgentKey(db, {
     name: input.name,
     keyPrefix: input.token.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),

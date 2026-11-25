@@ -38,9 +38,11 @@ export const PERSON_STATES = ["invited", "set_up", "working", "left"] as const;
  * системе»: the person gets the custom checks' matters (an unrecorded custom, «отдайте фану»), off by default;
  * submits_shift — «сдаёт смену в системе»: the person's switch of the shift report in Hub (ecosystem package F;
  * off — «Мои смены» as before); sees_own_pay — «видит свои деньги»: the person's switch of «Мои деньги» on «Мои
- * смены» (ecosystem package H1; off — the screen as before). Never anyone's rates.
+ * смены» (ecosystem package H1; off — the screen as before); reviews_shift_reports — «проверяет отчёты смен»
+ * (OA-002): explicit reviewer assignment for an agent person, decoupled from the `review:shift_reports` key capability.
+ * Never anyone's rates.
  */
-export const PERSON_RIGHTS = ["customs_lead", "records_customs", "submits_shift", "sees_own_pay"] as const;
+export const PERSON_RIGHTS = ["customs_lead", "records_customs", "submits_shift", "sees_own_pay", "reviews_shift_reports"] as const;
 export const PERSON_WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 /** Where a record came from: the owner's screen, the one-off import, an agent's accepted proposal. */
 export const PERSON_ORIGINS = ["owner", "import", "proposal"] as const;

@@ -394,7 +394,7 @@ function ruleHome(rule: SaleRuleConfig, sale: RuleSale, ix: Index, now: number):
     else shifts.push(work);
   }
   // Hub's old rule: the shifts holding it that `settleSale` does not call a colleague's.
-  const old = oldHolders(shifts, sale.lastWriter);
+  const old = oldHolders(shifts, sale.lastWriter, ix);
   if (old.some((work) => beforeRule(rule, work))) return homeOf("before_rule", "work_before_rule");
   if (sale.kind === "ppv" || sale.kind === "tip") {
     if (sale.postTip) return homeOf("pot", "post_tip", { pot: POT_OBSHAK });
@@ -417,20 +417,20 @@ function ruleHome(rule: SaleRuleConfig, sale: RuleSale, ix: Index, now: number):
 function holdersHome(rule: SaleRuleConfig, sale: RuleSale, shifts: readonly RuleWork[], visits: readonly RuleWork[], old: readonly RuleWork[], ix: Index): SaleHome {
   if (old.length === 0) {
     for (const visit of visits) {
-      if (sale.lastWriter !== null && visit.userId === sale.lastWriter) {
+      if (sale.lastWriter !== null && ix.personOf(visit.userId) === ix.personOf(sale.lastWriter)) {
         if (beforeRule(rule, visit)) return homeOf("before_rule", "work_before_rule");
         return whole(visit, sale.netMills, "look_in_last_writer");
       }
     }
     return homeOf("nobody", "no_holder");
   }
-  if (oneUser(old) && oneUser(shifts)) return whole(old[0]!, sale.netMills, "holder");
-  if (oneUser(old)) return whole(old[0]!, sale.netMills, "last_writer");
+  if (oneUser(old, ix) && oneUser(shifts, ix)) return whole(old[0]!, sale.netMills, "holder");
+  if (oneUser(old, ix)) return whole(old[0]!, sale.netMills, "last_writer");
   // Several people's shifts, none of them wrote last: the one whose slot runs, else the owner decides.
-  const slotted = [...new Set(shifts.map((work) => work.userId))]
-    .filter((personId) => slotRuns(ix.slots, { personId, pageId: sale.pageId, at: sale.occurredAt }));
-  if (slotted.length === 1) {
-    return { ...whole(shifts.find((work) => work.userId === slotted[0])!, sale.netMills, "slot_owner"), slotJunction: true };
+  const slottedWorks = shifts.filter((work) => slotRuns(ix.slots, { personId: work.userId, pageId: sale.pageId, at: sale.occurredAt }));
+  const slottedPeople = [...new Set(slottedWorks.map((work) => ix.personOf(work.userId)))];
+  if (slottedPeople.length === 1) {
+    return { ...whole(slottedWorks[0]!, sale.netMills, "slot_owner"), slotJunction: true };
   }
   return { ...decide(sale, [...shifts, ...visits], shifts, ix), slotJunction: true };
 }
@@ -439,22 +439,27 @@ function holdersHome(rule: SaleRuleConfig, sale: RuleSale, shifts: readonly Rule
  * The shifts Hub's `settleSale` gives the sale to: each that is alone or whose person wrote last; when the last writer
  * is a colleague among them, only theirs; when none of them is, all of them.
  */
-function oldHolders(shifts: readonly RuleWork[], lastWriter: number | null): RuleWork[] {
+function oldHolders(shifts: readonly RuleWork[], lastWriter: number | null, ix: Index): RuleWork[] {
+  const writerPerson = lastWriter === null ? null : ix.personOf(lastWriter);
   return shifts.filter((work) => {
+    const workPerson = ix.personOf(work.userId);
     let others = false;
     let writerAmong = false;
     for (const other of shifts) {
-      if (other.userId === work.userId) continue;
+      const otherPerson = ix.personOf(other.userId);
+      if (otherPerson === workPerson) continue;
       others = true;
-      if (lastWriter !== null && other.userId === lastWriter) writerAmong = true;
+      if (writerPerson !== null && otherPerson === writerPerson) writerAmong = true;
     }
-    const mine = !others || (lastWriter !== null && lastWriter === work.userId);
+    const mine = !others || (writerPerson !== null && writerPerson === workPerson);
     return mine || !writerAmong;
   });
 }
 
-function oneUser(works: readonly RuleWork[]): boolean {
-  return works.length > 0 && works.every((work) => work.userId === works[0]!.userId);
+function oneUser(works: readonly RuleWork[], ix: Index): boolean {
+  if (works.length === 0) return false;
+  const first = ix.personOf(works[0]!.userId);
+  return works.every((work) => ix.personOf(work.userId) === first);
 }
 
 /**
@@ -567,25 +572,28 @@ function workRefFor(user: number, sale: RuleSale, found: SaleHome, ix: Index): s
 function agreedHome(sale: RuleSale, found: SaleHome, ix: Index): SaleHome | null {
   if (found.reason === "marks" || found.reason === "owner_claim") return null;
   const people = found.kind === "waiting"
-    ? (sale.ppvSender === null ? [] : [sale.ppvSender.userId])
-    : [...new Set(found.shares.map((share) => share.userId))];
+    ? (sale.ppvSender === null ? [] : [ix.personOf(sale.ppvSender.userId)])
+    : [...new Set(found.shares.map((share) => ix.personOf(share.userId)))];
   if (people.length === 0) return null;
   const marks = sale.marks.filter((mark) => mark.confirmed);
   if (marks.length === 0) return null;
-  const saysNotMine = (user: number) => marks.some((mark) => mark.userId === user && mark.mark === "not_mine");
+  const saysNotMine = (person: string) => marks.some((mark) => ix.personOf(mark.userId) === person && mark.mark === "not_mine");
   const net = sale.netMills;
-  const settled = judgeMarks(marks);
+  const settled = judgeMarks(marks, ix);
   if (settled.kind === "mine") {
     const user = settled.users[0]!;
-    if (people.includes(user) || !people.every(saysNotMine)) return null;
-    const mills = mineMills(markOf(marks, user), net);
+    if (people.includes(ix.personOf(user)) || !people.every(saysNotMine)) return null;
+    const mills = mineMills(markOf(marks, user, ix), net);
     return sharesHome([{ workRef: workRefFor(user, sale, found, ix), userId: user, percent: percentOfNet(mills, net), mills }], "agreed", ix);
   }
   if (settled.kind === "share") {
     const [a, b] = settled.users as [number, number];
-    if (!people.every((user) => user === a || user === b || saysNotMine(user))) return null;
+    const pa = ix.personOf(a);
+    const pb = ix.personOf(b);
+    if (!people.every((person) => person === pa || person === pb || saysNotMine(person))) return null;
     const halves = halvesOf(net, a, b);
-    const same = found.shares.length === 2 && halves.every((half) => found.shares.some((share) => share.userId === half.userId && share.mills === half.mills));
+    const same = found.shares.length === 2
+      && halves.every((half) => found.shares.some((share) => ix.personOf(share.userId) === ix.personOf(half.userId) && share.mills === half.mills));
     if (same) return null;
     return sharesHome(halves.map((half) => ({ workRef: workRefFor(half.userId, sale, found, ix), userId: half.userId, percent: 50, mills: half.mills })), "agreed", ix);
   }
@@ -604,21 +612,21 @@ function decide(sale: RuleSale, holders: readonly RuleWork[], shifts: readonly R
   const net = sale.netMills;
   const resolution = sale.resolution ?? [];
   if (resolution.length > 0) return sharesHome(splitShares(net, resolution, (user) => workRefOf(user, holders, ix)), "owner_split", ix);
-  const settled = judgeMarks(sale.marks);
+  const settled = judgeMarks(sale.marks, ix);
   if (settled.kind === "mine") {
     const user = settled.users[0]!;
-    const mark = markOf(sale.marks, user);
+    const mark = markOf(sale.marks, user, ix);
     if (mark.confirmed) {
       const mills = mineMills(mark, net);
       return sharesHome([{ workRef: workRefOf(user, holders, ix), userId: user, percent: percentOfNet(mills, net), mills }], "marks", ix);
     }
   } else if (settled.kind === "share") {
     const [a, b] = settled.users as [number, number];
-    if (markOf(sale.marks, a).confirmed || markOf(sale.marks, b).confirmed) {
+    if (markOf(sale.marks, a, ix).confirmed || markOf(sale.marks, b, ix).confirmed) {
       return sharesHome(halvesOf(net, a, b).map((half) => ({ workRef: workRefOf(half.userId, holders, ix), userId: half.userId, percent: 50, mills: half.mills })), "marks", ix);
     }
   } else if (settled.kind === "not_mine") {
-    if (sale.marks.length > 0 && everyoneSaysNotMine(sale.marks, shifts)) return homeOf("nobody", "marks");
+    if (sale.marks.length > 0 && everyoneSaysNotMine(sale.marks, shifts, ix)) return homeOf("nobody", "marks");
   } else {
     return homeOf("decide", "marks_disagree");
   }
@@ -629,13 +637,21 @@ function decide(sale: RuleSale, holders: readonly RuleWork[], shifts: readonly R
  * Hub's `judgeMarks`: the marks agree only as one «моё» or as two «делим» naming each other («не моё» beside them is
  * fine); no claim at all — nobody's; anything else is a dispute the owner splits.
  */
-function judgeMarks(marks: readonly RuleMark[]): { kind: "mine" | "share" | "not_mine" | "dispute"; users: number[] } {
+function judgeMarks(marks: readonly RuleMark[], ix: Index): { kind: "mine" | "share" | "not_mine" | "dispute"; users: number[] } {
   const claims = marks.filter((mark) => mark.mark !== "not_mine");
   if (claims.length === 0) return { kind: "not_mine", users: [] };
   if (claims.length === 1 && claims[0]!.mark === "mine") return { kind: "mine", users: [claims[0]!.userId] };
   if (claims.length === 2) {
     const [a, b] = claims as [RuleMark, RuleMark];
-    if (a.mark === "share" && b.mark === "share" && a.shareWith === b.userId && b.shareWith === a.userId) {
+    if (
+      a.mark === "share"
+      && b.mark === "share"
+      && a.shareWith !== null
+      && b.shareWith !== null
+      && ix.personOf(a.userId) !== ix.personOf(b.userId)
+      && ix.personOf(a.shareWith) === ix.personOf(b.userId)
+      && ix.personOf(b.shareWith) === ix.personOf(a.userId)
+    ) {
       return { kind: "share", users: [a.userId, b.userId] };
     }
   }
@@ -644,15 +660,16 @@ function judgeMarks(marks: readonly RuleMark[]): { kind: "mine" | "share" | "not
 
 const NO_MARK: RuleMark = { userId: 0, mark: "not_mine", shareWith: null, ownAmountMills: null, confirmed: false };
 
-function markOf(marks: readonly RuleMark[], user: number): RuleMark {
-  return marks.find((mark) => mark.userId === user) ?? NO_MARK;
+function markOf(marks: readonly RuleMark[], user: number, ix: Index): RuleMark {
+  const person = ix.personOf(user);
+  return marks.find((mark) => mark.userId === user) ?? marks.find((mark) => ix.personOf(mark.userId) === person) ?? NO_MARK;
 }
 
 /** Every person whose shift holds the sale confirmed «не моё». */
-function everyoneSaysNotMine(marks: readonly RuleMark[], shifts: readonly RuleWork[]): boolean {
+function everyoneSaysNotMine(marks: readonly RuleMark[], shifts: readonly RuleWork[], ix: Index): boolean {
   return shifts.every((work) => {
-    const mark = markOf(marks, work.userId);
-    return mark.userId === work.userId && mark.mark === "not_mine" && mark.confirmed;
+    const person = ix.personOf(work.userId);
+    return marks.some((mark) => ix.personOf(mark.userId) === person && mark.mark === "not_mine" && mark.confirmed);
   });
 }
 

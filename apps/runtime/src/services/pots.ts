@@ -1226,21 +1226,20 @@ export async function reversePotDistribution(
       at: now,
     });
     if (!ok) throw new ConflictError("Раздача уже сторнирована", { reason: "already_reversed" });
-    if (pot.autoPost) {
-      // Reconciliation uses the roster on each sale's day, even for a batch posted on a later day.
-      const participantsByDay = new Map<string, string[]>();
-      for (const part of existing.parts) {
-        const day = part.saleDay ?? existing.day;
-        let participants = participantsByDay.get(day);
-        if (!participants) {
-          const ctx = await loadParticipantContext(tx, realmOf(principal), day);
-          participants = resolvePotParticipants({
-            ...ctx, day, mode: pot.participantsMode, pageIds: pot.pageIds, listed: pot.participants,
-          });
-          participantsByDay.set(day, participants);
-        }
-        await holdPotAutoPost(tx, part.transactionId, pot.id, participants);
+    // Always hold reversed sales against future auto-posts (even if the pot is currently manual and later switched
+    // to autoPost, or if participants/routing later change); manual postPotDistribution remains allowed.
+    const participantsByDay = new Map<string, string[]>();
+    for (const part of existing.parts) {
+      const day = part.saleDay ?? existing.day;
+      let participants = participantsByDay.get(day);
+      if (!participants) {
+        const ctx = await loadParticipantContext(tx, realmOf(principal), day);
+        participants = resolvePotParticipants({
+          ...ctx, day, mode: pot.participantsMode, pageIds: pot.pageIds, listed: pot.participants,
+        });
+        participantsByDay.set(day, participants);
       }
+      await holdPotAutoPost(tx, part.transactionId, pot.id, participants);
     }
     if (!pot.isTest) {
       const homes = await listSaleHomesForPotCheck(tx, existing.parts.map((part) => part.transactionId));
@@ -1385,13 +1384,11 @@ export async function reconcilePotsOfDay(
   }
   for (const hold of holds) {
     const sale = heldHomes.get(hold.transactionId);
-    const route = sale && routePotOfSale(sale, specsByRealm[sale.isTest ? "test" : "live"], potsFrom);
-    if (route?.status === "routed" && route.potId === hold.potId) {
-      const current = await participantsOf(potById.get(route.potId)!);
-      if (current.length === hold.participants.length && current.every((code, i) => code === hold.participants[i])) {
-        heldTransactions.add(hold.transactionId);
-        continue;
-      }
+    // Keep the manual-reversal hold as long as the sale stays in pots, regardless of pot or participant edits;
+    // only clear it if the sale leaves pots altogether.
+    if (sale !== undefined && sale.home === "pot") {
+      heldTransactions.add(hold.transactionId);
+      continue;
     }
     await clearPotAutoPostHold(tx, hold.transactionId, hold.potId);
   }

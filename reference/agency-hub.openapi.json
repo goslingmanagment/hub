@@ -77279,7 +77279,7 @@
                     ]
                   },
                   "rights": {
-                    "maxItems": 4,
+                    "maxItems": 5,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -77287,7 +77287,8 @@
                         "customs_lead",
                         "records_customs",
                         "submits_shift",
-                        "sees_own_pay"
+                        "sees_own_pay",
+                        "reviews_shift_reports"
                       ]
                     }
                   },
@@ -77934,7 +77935,8 @@
                                   "customs_lead",
                                   "records_customs",
                                   "submits_shift",
-                                  "sees_own_pay"
+                                  "sees_own_pay",
+                                  "reviews_shift_reports"
                                 ]
                               },
                               "grantedAt": {
@@ -79654,7 +79656,8 @@
                                       "customs_lead",
                                       "records_customs",
                                       "submits_shift",
-                                      "sees_own_pay"
+                                      "sees_own_pay",
+                                      "reviews_shift_reports"
                                     ]
                                   },
                                   "grantedAt": {
@@ -80431,7 +80434,8 @@
                                   "customs_lead",
                                   "records_customs",
                                   "submits_shift",
-                                  "sees_own_pay"
+                                  "sees_own_pay",
+                                  "reviews_shift_reports"
                                 ]
                               },
                               "grantedAt": {
@@ -81386,7 +81390,7 @@
                     ]
                   },
                   "rights": {
-                    "maxItems": 4,
+                    "maxItems": 5,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -81394,7 +81398,8 @@
                         "customs_lead",
                         "records_customs",
                         "submits_shift",
-                        "sees_own_pay"
+                        "sees_own_pay",
+                        "reviews_shift_reports"
                       ]
                     }
                   },
@@ -81958,7 +81963,8 @@
                                   "customs_lead",
                                   "records_customs",
                                   "submits_shift",
-                                  "sees_own_pay"
+                                  "sees_own_pay",
+                                  "reviews_shift_reports"
                                 ]
                               },
                               "grantedAt": {
@@ -83233,7 +83239,8 @@
                                   "customs_lead",
                                   "records_customs",
                                   "submits_shift",
-                                  "sees_own_pay"
+                                  "sees_own_pay",
+                                  "reviews_shift_reports"
                                 ]
                               },
                               "grantedAt": {
@@ -84525,7 +84532,8 @@
                                   "customs_lead",
                                   "records_customs",
                                   "submits_shift",
-                                  "sees_own_pay"
+                                  "sees_own_pay",
+                                  "reviews_shift_reports"
                                 ]
                               },
                               "grantedAt": {
@@ -167598,7 +167606,8 @@
                                 "customs_lead",
                                 "records_customs",
                                 "submits_shift",
-                                "sees_own_pay"
+                                "sees_own_pay",
+                                "reviews_shift_reports"
                               ]
                             }
                           },
@@ -167613,7 +167622,8 @@
                                     "customs_lead",
                                     "records_customs",
                                     "submits_shift",
-                                    "sees_own_pay"
+                                    "sees_own_pay",
+                                    "reviews_shift_reports"
                                   ]
                                 },
                                 "grantedAt": {
@@ -168145,7 +168155,7 @@
                             ]
                           },
                           "rights": {
-                            "maxItems": 4,
+                            "maxItems": 5,
                             "type": "array",
                             "items": {
                               "type": "string",
@@ -168153,7 +168163,8 @@
                                 "customs_lead",
                                 "records_customs",
                                 "submits_shift",
-                                "sees_own_pay"
+                                "sees_own_pay",
+                                "reviews_shift_reports"
                               ]
                             }
                           },
@@ -168466,7 +168477,7 @@
                             ]
                           },
                           "rights": {
-                            "maxItems": 4,
+                            "maxItems": 5,
                             "type": "array",
                             "items": {
                               "type": "string",
@@ -168474,7 +168485,8 @@
                                 "customs_lead",
                                 "records_customs",
                                 "submits_shift",
-                                "sees_own_pay"
+                                "sees_own_pay",
+                                "reviews_shift_reports"
                               ]
                             }
                           },
@@ -189355,6 +189367,35 @@
                                   }
                                 ]
                               },
+                              "appliedDeliveries": {
+                                "default": [],
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "person": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "userId": {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "reportDate": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "person",
+                                    "userId",
+                                    "reportDate"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
                               "ledgerDecisionId": {
                                 "anyOf": [
                                   {
@@ -189384,6 +189425,7 @@
                               "decidedAt",
                               "note",
                               "applied",
+                              "appliedDeliveries",
                               "ledgerDecisionId"
                             ],
                             "additionalProperties": false
@@ -320055,6 +320097,7 @@
                   },
                   "transactionIds": {
                     "minItems": 1,
+                    "maxItems": 500,
                     "type": "array",
                     "items": {
                       "type": "integer",
@@ -416638,7 +416681,8 @@
                                     "customs_lead",
                                     "records_customs",
                                     "submits_shift",
-                                    "sees_own_pay"
+                                    "sees_own_pay",
+                                    "reviews_shift_reports"
                                   ]
                                 },
                                 "grantedAt": {

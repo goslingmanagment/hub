@@ -83,8 +83,8 @@ const agentTeamSaleSchema = z.object({
   /** Everyone who wrote to the fan on the page in those 48 hours, most messages first. */
   writers: z.array(z.object({ userId: intId, username: z.string(), messages: count })),
   /**
-   * Always empty: the chatters' marks of the sale in Hub's old shift-report tables, which hold nothing and are read no
-   * more (a shift's report is its hand-in). The field stays for the ledger, which parses it.
+   * Confirmed chatter statements and mutual agreements (`not_mine`, `agreed` transfers) from submitted Hub reports and
+   * settled claims, normalized to the person's active login when available (OA-004 / OA-005).
    */
   marks: z.array(z.object({
     userId: intId,

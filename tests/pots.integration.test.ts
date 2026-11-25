@@ -693,7 +693,7 @@ describe("Workboard pots (0443, H11)", () => {
     expect((await f.distributions())[0]).toMatchObject({ id: posted!.id, reversedAt: null });
   });
 
-  it("a manual reversal suppresses only automatic reposts until the recipients change", async (context) => {
+  it("a manual reversal suppresses automatic reposts even across participant changes and manual-to-auto switches", async (context) => {
     if (!testDb) return context.skip();
     const f = await fixturePot("hold");
     const day = "2026-12-05";
@@ -713,7 +713,19 @@ describe("Workboard pots (0443, H11)", () => {
       participants: [...f.pot.participants, { personCode: extra, fromDay: day, toDay: null }],
     }, f.now);
     await f.refresh(day);
-    expect((await f.distributions()).filter((d) => d.reversedAt === null).map((d) => d.baseMills).sort()).toEqual([12, 5]);
+    // Reversal hold stays active despite participant change — remaining 12 mills is NOT auto-posted.
+    expect((await f.distributions()).filter((d) => d.reversedAt === null).map((d) => d.baseMills)).toEqual([5]);
+
+    // Also holds when reversed while pot is manual (`autoPost: false`) and later switched to `autoPost: true`.
+    const fManual = await fixturePot("hold-manual-switch", { autoPost: false });
+    const day2 = "2026-12-06";
+    const tx2 = await fManual.sale(day2);
+    await fManual.refresh(day2);
+    const postedManual = await postPotDistribution(app, fManual.owner, fManual.pot.id, { day: day2, parts: [{ transactionId: tx2, baseMills: 17 }] }, fManual.now);
+    await reversePotDistribution(app, fManual.owner, postedManual.distribution.id, { reason: "Manual reversal before auto" }, fManual.now);
+    await updatePotService(app, fManual.owner, fManual.pot.id, { autoPost: true }, fManual.now);
+    await fManual.refresh(day2);
+    expect((await fManual.distributions()).filter((d) => d.reversedAt === null)).toEqual([]);
   });
 
   it("holds every reversed manual part against its sale-day roster and allows edits after reversal", async (context) => {
