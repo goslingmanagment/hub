@@ -243,6 +243,26 @@ export const teamShiftReviewResponseSchema = z.object({
     workedMinutes: count,
     /** A break going on now is one too, up to the hub's now. */
     pauses: z.array(z.object({ from: isoTimestamp, to: isoTimestamp })),
+    /**
+     * Shift break classification by no-send gaps (`SHIFT_PAUSE_POLICY`: 10 / 60 / 3): longest gap >= 10 min without
+     * authored sends is `rest` (norm <= 60 min), remaining gaps are `away` (#1..#3) and `away_excess` (#4+). Absent on visits.
+     */
+    pausePolicy: z.object({
+      breaks: z.array(z.object({
+        from: isoTimestamp,
+        to: isoTimestamp,
+        minutes: count,
+        kind: z.enum(["rest", "away", "away_excess"]),
+        overrunMinutes: count,
+        awayIndex: z.number().int().positive().nullable(),
+      })),
+      restMinutes: count,
+      restOverrunMinutes: count,
+      awayCount: count,
+      awayExcessCount: count,
+      awayMinutes: count,
+      preliminary: z.boolean(),
+    }).optional(),
     /** The start of the shift's last minute with an action. */
     lastInputAt: isoTimestamp,
     /** The start of its last minute the extension beat in: older than CLIENT_ACTIVITY_LOST_MINUTES — closed or offline. */

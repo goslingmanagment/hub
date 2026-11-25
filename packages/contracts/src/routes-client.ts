@@ -2458,6 +2458,11 @@ export const CHATTER_SHIFT_END_IDLE_MINUTES = 60;
  * change.
  */
 export const CHATTER_SHIFT_SLOT_PAUSE_SINCE = "2026-11-19T00:00:00+03:00";
+/**
+ * From when an authored send minute counts as active work inside an already-started stretch of `workOfMinutes`
+ * (fixes return-minute / missed-beat false pauses without retroactively moving historical shifts).
+ */
+export const CHATTER_SHIFT_SEND_ACTIVE_SINCE = "2026-11-26T00:00:00+03:00";
 /** Less work than this is a visit, not a shift. */
 export const CHATTER_SHIFT_MIN_WORKED_MINUTES = 120;
 /** Fewer messages than this is a visit, not a shift, however long the extension was in use. */

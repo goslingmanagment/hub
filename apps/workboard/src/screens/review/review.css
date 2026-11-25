@@ -526,6 +526,26 @@
     fill-opacity: 0.75;
   }
 
+  .review-pulse__break--rest {
+    fill: var(--review-pace);
+    fill-opacity: 0.14;
+  }
+
+  .review-pulse__break--rest-over {
+    fill: var(--ui-warn);
+    fill-opacity: 0.24;
+  }
+
+  .review-pulse__break--away {
+    fill: var(--ui-warn);
+    fill-opacity: 0.11;
+  }
+
+  .review-pulse__break--excess {
+    fill: var(--ui-mark-text);
+    fill-opacity: 0.22;
+  }
+
   .review-pulse__span {
     fill: var(--ui-accent-soft);
     fill-opacity: 0.85;

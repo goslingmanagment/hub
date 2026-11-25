@@ -1,7 +1,8 @@
 import { useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { SHIFT_PAUSE_POLICY } from "@agency_hub_core/contracts";
 import { formatCount, formatMills, formatTimeOfDay } from "@agency_hub_core/ui/format";
 import { PACE_WINDOW_MINUTES, PICK_MINUTES, REPLY_FAST_SECONDS, REPLY_NORM_SECONDS, REPLY_WINDOW_MINUTES, activityRuns, waitText } from "@agency_hub_core/ui/shiftReview";
-import type { PulseMinute, ReviewSale } from "./data.js";
+import type { PulseMinute, ReviewSale, ReviewShiftBreak } from "./data.js";
 
 /**
  * The shift's pulse (spec §4.2): three tracks on one time axis, as the
@@ -68,8 +69,33 @@ function niceTop(value: number): number {
   return Math.ceil(value / 50) * 50;
 }
 
+function breakLabel(one: ReviewShiftBreak, preliminary: boolean): string {
+  const suffix = preliminary ? " (предв.)" : "";
+  if (one.kind === "rest") {
+    return one.overrunMinutes > 0
+      ? `отдых ${formatCount(one.minutes)} мин (+${formatCount(one.overrunMinutes)} мин)${suffix}`
+      : `отдых ${formatCount(one.minutes)} мин${suffix}`;
+  }
+  if (one.kind === "away") {
+    return `отход ${one.awayIndex ?? 1}/${SHIFT_PAUSE_POLICY.maxAwayCount} · ${formatCount(one.minutes)} мин${suffix}`;
+  }
+  return `лишний отход #${one.awayIndex ?? SHIFT_PAUSE_POLICY.maxAwayCount + 1} · ${formatCount(one.minutes)} мин${suffix}`;
+}
+
+function breakClass(one: ReviewShiftBreak): string {
+  if (one.kind === "rest") return one.overrunMinutes > 0 ? "review-pulse__break review-pulse__break--rest-over" : "review-pulse__break review-pulse__break--rest";
+  return one.kind === "away_excess" ? "review-pulse__break review-pulse__break--excess" : "review-pulse__break review-pulse__break--away";
+}
+
 /** The pace's name on the left; the hovered minute's values on the right, in a row that keeps its height. */
-function Head({ minute, paused, sale, ongoing }: { minute: PulseMinute | null; paused: boolean; sale: number; ongoing: boolean }) {
+function Head({ minute, paused, activeBreak, breaksPreliminary, sale, ongoing }: {
+  minute: PulseMinute | null;
+  paused: boolean;
+  activeBreak: ReviewShiftBreak | null;
+  breaksPreliminary: boolean;
+  sale: number;
+  ongoing: boolean;
+}) {
   const openWords = ongoing ? "пока без ответа" : "без ответа";
   const parts: ReactNode[] = [];
   if (minute !== null) {
@@ -93,8 +119,13 @@ function Head({ minute, paused, sale, ongoing }: { minute: PulseMinute | null; p
       </span>,
     );
     if (sale > 0) parts.push(<span key="sale"><i className="review-key review-key--sale" />{formatMills(sale)}</span>);
-    const state = paused ? "пауза" : minute.activity === "input" ? null : minute.activity === "open" ? "расширение открыто" : "расширение закрыто";
-    if (state) parts.push(<span key="state" className="review-pulse__quiet">{state}</span>);
+    if (activeBreak !== null) {
+      const warn = activeBreak.kind === "away_excess" || activeBreak.overrunMinutes > 0;
+      parts.push(<span key="break" className={warn ? "review-pulse__warm" : "review-pulse__quiet"}>{breakLabel(activeBreak, breaksPreliminary)}</span>);
+    } else {
+      const state = paused ? "пауза" : minute.activity === "input" ? null : minute.activity === "open" ? "расширение открыто" : "расширение закрыто";
+      if (state) parts.push(<span key="state" className="review-pulse__quiet">{state}</span>);
+    }
   }
   return (
     <div className="review-pulse__head">
@@ -104,10 +135,12 @@ function Head({ minute, paused, sale, ongoing }: { minute: PulseMinute | null; p
   );
 }
 
-export function Pulse({ minutes, sales, pauses, start, end, ongoing, span, onSpan }: {
+export function Pulse({ minutes, sales, pauses, breaks = [], breaksPreliminary = false, start, end, ongoing, span, onSpan }: {
   minutes: readonly PulseMinute[];
   sales: readonly ReviewSale[];
   pauses: ReadonlyArray<{ from: number; to: number }>;
+  breaks?: readonly ReviewShiftBreak[];
+  breaksPreliminary?: boolean;
   start: number;
   end: number;
   ongoing: boolean;
@@ -187,18 +220,22 @@ export function Pulse({ minutes, sales, pauses, start, end, ongoing, span, onSpa
   const minute = hover === null ? null : minutes[hover] ?? null;
   const cursor = minute === null ? null : x(minute.at + MINUTE_MS / 2);
   const paused = minute !== null && pauses.some((pause) => minute.at + MINUTE_MS / 2 >= pause.from && minute.at + MINUTE_MS / 2 < pause.to);
+  const activeBreak = minute === null ? null : breaks.find((one) => minute.at + MINUTE_MS / 2 >= one.from && minute.at + MINUTE_MS / 2 < one.to) ?? null;
   const sale = cursor === null ? 0 : sales.filter((one) => Math.abs(x(one.at) - cursor) <= SALE_NEAR_PX).reduce((sum, one) => sum + one.mills, 0);
   const ticks = hourTicks(start, end, width);
   const norm = { top: yReply(REPLY_NORM_SECONDS / 60), bottom: yReply(REPLY_FAST_SECONDS / 60) };
 
   return (
     <section className="review-pulse" aria-label="Пульс смены">
-      <Head minute={drag ? null : minute} paused={paused} sale={sale} ongoing={ongoing} />
+      <Head minute={drag ? null : minute} paused={paused} activeBreak={activeBreak} breaksPreliminary={breaksPreliminary} sale={sale} ongoing={ongoing} />
       <div ref={box} className="review-pulse__plot" style={{ height: PLOT + AXIS }}>
         {width > 0 && paths && (
           <svg width={width} height={PLOT + AXIS} role="img" aria-label="Пульс смены: темп сообщений, ответ фанам, ждавшие ответа фаны, паузы">
             {pauses.map((pause) => (
-              <rect key={pause.from} className="review-pulse__pause" x={x(Math.max(start, pause.from))} y={0} width={Math.max(1, x(Math.min(end, pause.to)) - x(Math.max(start, pause.from)))} height={PLOT} />
+              <rect key={`p-${pause.from}`} className="review-pulse__pause" x={x(Math.max(start, pause.from))} y={0} width={Math.max(1, x(Math.min(end, pause.to)) - x(Math.max(start, pause.from)))} height={PLOT} />
+            ))}
+            {breaks.map((one) => (
+              <rect key={`b-${one.from}`} className={breakClass(one)} x={x(Math.max(start, one.from))} y={0} width={Math.max(1, x(Math.min(end, one.to)) - x(Math.max(start, one.from)))} height={PLOT} />
             ))}
             {shown && (
               <rect className="review-pulse__span" x={x(Math.max(start, shown.from))} y={0} width={Math.max(2, x(Math.min(end, shown.to)) - x(Math.max(start, shown.from)))} height={PLOT} rx={2} />

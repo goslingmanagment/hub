@@ -129,6 +129,7 @@ export * from "./routes-workboard-today.ts";
 export * from "./routes.ts";
 export * from "./sale-claims.ts";
 export * from "./sdk-runtime.ts";
+export * from "./shift-pause-policy.ts";
 export * from "./shift-report-board.ts";
 export * from "./shift-review-audit.ts";
 // The shift review's quality numbers, one definition for the review's screen and «Смены» (`teamChatterNumbers`).

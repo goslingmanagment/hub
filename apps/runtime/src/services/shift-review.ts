@@ -10,7 +10,9 @@ import {
   SHIFT_REVIEW_REPLY_NORM_SECONDS,
   SHIFT_REVIEW_SEAM_MINUTES,
   SHIFT_REVIEW_WAIT_HORIZON_HOURS,
+  classifyShiftBreaks,
   shiftReviewHi,
+  shiftSendBreaksOf,
   type ShiftReviewChat,
   type ShiftReviewMessage,
   type ShiftReviewMine,
@@ -1109,7 +1111,21 @@ export async function computeShiftReview(
   const colleagues = piecesOf(everyoneMap, "shift").filter((one) => one.userId !== query.userId);
   const allFans = pagesWithAllFans(shift, colleagues, start, end);
   const workedPageIds = pages.filter((page) => allFans.has(page.label)).map((page) => page.id);
-  const pageWatches = pageWatchesOf({ shift, pages, slots: slotMap.get(query.userId) ?? [], colleagues, start, end });
+  const userSlots = slotMap.get(query.userId) ?? [];
+  const pageWatches = pageWatchesOf({ shift, pages, slots: userSlots, colleagues, start, end });
+  const overlappingSlots = userSlots.filter((occ) => occ.start < end && occ.end > start);
+  const slotStart = overlappingSlots.length === 0 ? null : Math.min(...overlappingSlots.map((occ) => occ.start));
+  const pausePolicy = shift.kind === "shift"
+    ? classifyShiftBreaks(
+      shiftSendBreaksOf({
+        sendMinutes: (person.sent ?? []).map((one) => one.at),
+        shiftStart: start,
+        shiftEnd: end,
+        slotStart,
+      }),
+      { ongoing: shift.ongoing },
+    )
+    : null;
   const watchByPageId = new Map(pageWatches.map((watch) => [watch.pageId, watch]));
   const colleagueSpans = colleagueSpansOf({ pages, colleagues, start, end });
   const workedWindows = workedWindowsOf(pageWatches, workedPageIds, end);
@@ -1334,6 +1350,19 @@ export async function computeShiftReview(
       ongoing: shift.ongoing,
       workedMinutes: shift.workedMinutes,
       pauses: shift.pauses.map((pause) => ({ from: new Date(pause.from).toISOString(), to: new Date(pause.to).toISOString() })),
+      ...(pausePolicy === null ? {} : {
+        pausePolicy: {
+          ...pausePolicy,
+          breaks: pausePolicy.breaks.map((one) => ({
+            from: new Date(one.from).toISOString(),
+            to: new Date(one.to).toISOString(),
+            minutes: one.minutes,
+            kind: one.kind,
+            overrunMinutes: one.overrunMinutes,
+            awayIndex: one.awayIndex,
+          })),
+        },
+      }),
       lastInputAt: new Date(shift.lastInputAt).toISOString(),
       lastBeatAt: new Date(shift.lastBeatAt).toISOString(),
       pages: pages.map((page) => {
