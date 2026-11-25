@@ -155,6 +155,8 @@ export function evaluateHydrationLanes(platform: Platform): HydrationAdmissibili
 /** Claims one cycle may make, and the page size of the scan that finds them. */
 const DISPATCH_BATCH_LIMIT = 5;
 const SWEEP_BATCH_LIMIT = 20;
+/** Upper bound on batches per sweep pass so one tick stays bounded even with huge queues. */
+const SWEEP_MAX_BATCHES = 20;
 
 /**
  * How long a dispatched request may stay `dispatching` before the sweeper calls
@@ -273,18 +275,31 @@ async function settleEndedEngineHydration(app: AppContext): Promise<number> {
  * Engine serves (`FANSLY_SYNC_ENGINE_HYDRATION_LANE`, filtered by the list):
  * that row mirrors a history request. */
 async function expireAgentHydration(app: AppContext): Promise<number> {
-  const rows = await listExpirableAgentHydrationRequests(app.db, { limit: SWEEP_BATCH_LIMIT });
+  const scanned: number[] = [];
   let expired = 0;
-  for (const row of rows) {
-    if (row.state !== "requested" && row.state !== "approved") {
-      continue;
-    }
-    const outcome = await expireAgentHydrationRequest(app.db, {
-      id: row.id,
-      fromState: row.state,
+  for (let batch = 0; batch < SWEEP_MAX_BATCHES; batch += 1) {
+    const rows = await listExpirableAgentHydrationRequests(app.db, {
+      limit: SWEEP_BATCH_LIMIT,
+      excludeIds: scanned,
     });
-    if (outcome === "applied") {
-      expired += 1;
+    if (rows.length === 0) {
+      break;
+    }
+    for (const row of rows) {
+      scanned.push(row.id);
+      if (row.state !== "requested" && row.state !== "approved") {
+        continue;
+      }
+      const outcome = await expireAgentHydrationRequest(app.db, {
+        id: row.id,
+        fromState: row.state,
+      });
+      if (outcome === "applied") {
+        expired += 1;
+      }
+    }
+    if (rows.length < SWEEP_BATCH_LIMIT) {
+      break;
     }
   }
   return expired;
@@ -304,35 +319,48 @@ async function expireAgentHydration(app: AppContext): Promise<number> {
  * outcome; the work's own record does.
  */
 export async function sweepStuckAgentHydration(app: AppContext): Promise<number> {
-  const rows = await listStuckAgentHydrationDispatches(app.db, { limit: SWEEP_BATCH_LIMIT });
+  const scanned: number[] = [];
   let swept = 0;
-  for (const row of rows) {
-    const executionRef = row.executionRef;
-    const lane = (LANE_IN_FLIGHT[row.platform as Platform] as LaneInFlight | undefined) ?? null;
-    const verdict: InFlightVerdict = lane === null || executionRef === null
-      ? { kind: "gone" }
-      : await lane.read({ app, row: { ...row, executionRef } });
-    if (verdict.kind === "running") {
-      app.logger.info(
-        { requestRef: row.requestRef, executionRef: row.executionRef },
-        "Agent hydration dispatch is past its deadline but its work is still running",
-      );
-      continue;
+  for (let batch = 0; batch < SWEEP_MAX_BATCHES; batch += 1) {
+    const rows = await listStuckAgentHydrationDispatches(app.db, {
+      limit: SWEEP_BATCH_LIMIT,
+      excludeIds: scanned,
+    });
+    if (rows.length === 0) {
+      break;
     }
-    const outcome = verdict.kind === "settle"
-      ? await verdict.settle("sweeper")
-      : (await settleAgentHydrationRequest(app.db, {
-        id: row.id,
-        toState: "failed",
-        lastError: "timeout",
-        actor: "sweeper",
-      })).outcome;
-    if (outcome === "applied") {
-      swept += 1;
-      app.logger.warn(
-        { requestRef: row.requestRef, pageLabel: row.pageLabel, executionRef: row.executionRef },
-        "Agent hydration request passed its dispatch deadline without settling; settled from its record",
-      );
+    for (const row of rows) {
+      scanned.push(row.id);
+      const executionRef = row.executionRef;
+      const lane = (LANE_IN_FLIGHT[row.platform as Platform] as LaneInFlight | undefined) ?? null;
+      const verdict: InFlightVerdict = lane === null || executionRef === null
+        ? { kind: "gone" }
+        : await lane.read({ app, row: { ...row, executionRef } });
+      if (verdict.kind === "running") {
+        app.logger.info(
+          { requestRef: row.requestRef, executionRef: row.executionRef },
+          "Agent hydration dispatch is past its deadline but its work is still running",
+        );
+        continue;
+      }
+      const outcome = verdict.kind === "settle"
+        ? await verdict.settle("sweeper")
+        : (await settleAgentHydrationRequest(app.db, {
+          id: row.id,
+          toState: "failed",
+          lastError: "timeout",
+          actor: "sweeper",
+        })).outcome;
+      if (outcome === "applied") {
+        swept += 1;
+        app.logger.warn(
+          { requestRef: row.requestRef, pageLabel: row.pageLabel, executionRef: row.executionRef },
+          "Agent hydration request passed its dispatch deadline without settling; settled from its record",
+        );
+      }
+    }
+    if (rows.length < SWEEP_BATCH_LIMIT) {
+      break;
     }
   }
   return swept;
@@ -349,20 +377,33 @@ export async function sweepStuckAgentHydration(app: AppContext): Promise<number>
  * left to the stuck sweep.
  */
 export async function reconcileAgentHydrationDispatches(app: AppContext): Promise<number> {
-  const rows = await listDispatchingAgentHydrationRequests(app.db, { limit: SWEEP_BATCH_LIMIT });
+  const scanned: number[] = [];
   let reconciled = 0;
-  for (const row of rows) {
-    const lane = LANE_IN_FLIGHT[row.platform as Platform] as LaneInFlight | undefined;
-    const executionRef = row.executionRef;
-    if (row.executionLane === null || executionRef === null || !lane) {
-      continue;
+  for (let batch = 0; batch < SWEEP_MAX_BATCHES; batch += 1) {
+    const rows = await listDispatchingAgentHydrationRequests(app.db, {
+      limit: SWEEP_BATCH_LIMIT,
+      excludeIds: scanned,
+    });
+    if (rows.length === 0) {
+      break;
     }
-    const verdict = await lane.read({ app, row: { ...row, executionRef } });
-    if (verdict.kind !== "settle") {
-      continue;
+    for (const row of rows) {
+      scanned.push(row.id);
+      const lane = LANE_IN_FLIGHT[row.platform as Platform] as LaneInFlight | undefined;
+      const executionRef = row.executionRef;
+      if (row.executionLane === null || executionRef === null || !lane) {
+        continue;
+      }
+      const verdict = await lane.read({ app, row: { ...row, executionRef } });
+      if (verdict.kind !== "settle") {
+        continue;
+      }
+      if (await verdict.settle("executor") === "applied") {
+        reconciled += 1;
+      }
     }
-    if (await verdict.settle("executor") === "applied") {
-      reconciled += 1;
+    if (rows.length < SWEEP_BATCH_LIMIT) {
+      break;
     }
   }
   return reconciled;

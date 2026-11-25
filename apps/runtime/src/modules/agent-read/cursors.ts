@@ -6,8 +6,10 @@ import {
   canonicalJson,
   openCursorEnvelope,
   sealCursorEnvelope,
+  SIGNED_CURSOR_MAX_LENGTH,
   type SignedCursorKeyRing,
 } from "../../services/signed-cursor.ts";
+import { AppError } from "../../services/errors.ts";
 import { AgentCursorInvalidError } from "./errors.ts";
 
 export { canonicalJson };
@@ -57,7 +59,7 @@ const cursorPayloadSchema = z.object({
    * dataset whose keyset happens to parse — the response then presents a
    * different population as a continuation of the first page.
    */
-  resource: z.string().min(1).max(200),
+  resource: z.string().min(1).max(600),
   /** The agent key that minted it. A foreign cursor is refused. */
   keyId: z.number().int().positive(),
   /** Already resolved and intersected with the grant at mint time. */
@@ -97,7 +99,18 @@ export function encodeAgentCursor(
     paramsHash: agentParamsHash(payload.params),
     issuedAt: payload.issuedAt ?? new Date().toISOString(),
   } satisfies AgentCursorPayload);
-  return sealCursorEnvelope(CURSOR_HMAC_DOMAIN, canonical, signing);
+  const token = sealCursorEnvelope(CURSOR_HMAC_DOMAIN, canonical, signing, undefined, {
+    compressIfOversized: true,
+  });
+  if (token.length > SIGNED_CURSOR_MAX_LENGTH) {
+    // BL-A9: never emit a cursor this server itself would refuse on the next page.
+    throw new AppError(
+      "Query parameters are too large to paginate within cursor size limits",
+      400,
+      "agent_cursor_too_large",
+    );
+  }
+  return token;
 }
 
 export interface AgentCursorExpectation {

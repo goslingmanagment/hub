@@ -8,6 +8,8 @@ import {
   canonicalJson,
   decodeSignedCursor,
   encodeSignedCursor,
+  openCursorEnvelope,
+  sealCursorEnvelope,
   SIGNED_CURSOR_MAX_LENGTH,
   signedCursorKeyRing,
   SignedCursorInvalidError,
@@ -228,5 +230,36 @@ describe("signed cursor core: the agent envelope is unchanged", () => {
     expect(() => decodeAgentCursor(scoped, {
       operation: "agentThreadMessages", resource: "conversation:4:555001", keyId: 42, pageIds: [4, 5], archiveGeneration: 3,
     }, agentRing)).toThrow("cursor is not valid for this request");
+  });
+
+  it("format 2 compresses oversized envelopes with compress-then-MAC and leaves normal envelopes at format 1", () => {
+    const small = sealCursorEnvelope("agency-hub:test:v1", { ok: true }, agentRing, undefined, {
+      compressIfOversized: true,
+    });
+    expect(envelopeOf(small).format).toBe(1);
+
+    const bigPayload = { items: Array.from({ length: 120 }, (_, i) => `item-value-${i}`) };
+    const compressed = sealCursorEnvelope("agency-hub:test:v1", bigPayload, agentRing, "scope-a", {
+      compressIfOversized: true,
+    });
+    expect(compressed.length).toBeLessThanOrEqual(SIGNED_CURSOR_MAX_LENGTH);
+    const env = envelopeOf(compressed);
+    expect(env.format).toBe(2);
+    expect(Object.keys(env).sort()).toEqual(["format", "keyVersion", "mac", "z"]);
+
+    expect(openCursorEnvelope("agency-hub:test:v1", compressed, agentRing, "scope-a")).toEqual({
+      ok: true,
+      payload: bigPayload,
+    });
+    expect(openCursorEnvelope("agency-hub:test:v1", compressed, agentRing, "scope-b")).toEqual({
+      ok: false,
+      reason: "signature",
+    });
+    // Tampering with z fails MAC BEFORE inflate is ever reached.
+    const tampered = reencode({ ...env, z: "AAAA" });
+    expect(openCursorEnvelope("agency-hub:test:v1", tampered, agentRing, "scope-a")).toEqual({
+      ok: false,
+      reason: "signature",
+    });
   });
 });

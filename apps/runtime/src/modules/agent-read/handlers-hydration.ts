@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import { z } from "zod";
+
 import {
   agentHydrationRequestDecideBodySchema,
 } from "@agency_hub_core/contracts";
@@ -23,6 +25,7 @@ import {
   isFanslyPageEngineOwned,
   listAgentHydrationRequests,
   markAgentHydrationEngineManaged,
+  readAgentHydrationRequestHighWater,
   type AgentHydrationRequestRecord,
   type Database,
 } from "@agency_hub_core/db";
@@ -36,11 +39,19 @@ import {
   hasHydrationExecutorLane,
 } from "../../services/agent-hydration.ts";
 import { AppError, BadRequestError } from "../../services/errors.ts";
+import {
+  decodeSignedCursor,
+  encodeSignedCursor,
+  signedCursorKeyRing,
+  SignedCursorInvalidError,
+  type SignedCursorSpec,
+} from "../../services/signed-cursor.ts";
 import { FanslyPageSwitchingError } from "../../services/sync-engine-levers.ts";
 import { getHistoryRequest, HistoryRequestError, submitHistoryRequest } from "../../sync/requests/history.ts";
 import { historyIntakeOfLegacyHydration, mirrorLegacyHydrationState } from "../../sync/requests/legacy-hydration.ts";
 import { AGENT_PLANE_MODE, buildAgentEvidence, type AgentPlaneMode } from "./epistemics.ts";
 import {
+  AgentCursorInvalidError,
   AgentHydrationConflictError,
   AgentHydrationNotAdmissibleError,
   AgentHydrationProposalStaleError,
@@ -205,6 +216,10 @@ function hydrationEvidence(input: {
   claimFields: readonly string[] | null;
   witnesses: Parameters<typeof buildAgentEvidence>[0]["planeReads"];
   scopeNarrowing: { keyGrantExcludedPages: number; totalPagesForQuery: number };
+  delivery?: { snapshotExhausted: boolean; nextCursor: string | null };
+  cursorConsumed?: boolean;
+  cursorCapable?: boolean;
+  frozenSnapshot?: boolean;
 }) {
   const operationPlanes = operationPlanesFor([...HYDRATION_PLANES], input.claimFields);
   return buildAgentEvidence({
@@ -213,10 +228,10 @@ function hydrationEvidence(input: {
     operationPlanes,
     planeReads: input.witnesses,
     planesNotRead: planesNotRead({ operationPlanes, witnesses: input.witnesses }),
-    delivery: { snapshotExhausted: true, nextCursor: null },
-    cursorConsumed: false,
-    cursorCapable: false,
-    frozenSnapshot: true,
+    delivery: input.delivery ?? { snapshotExhausted: true, nextCursor: null },
+    cursorConsumed: input.cursorConsumed ?? false,
+    cursorCapable: input.cursorCapable ?? false,
+    frozenSnapshot: input.frozenSnapshot ?? true,
     requestWindow: null,
     gaps: [],
     scopeFieldStates: {},
@@ -694,46 +709,110 @@ export async function handleAgentHydrationRequestDecide(
 // The owner approval queue (dashboard, §13 "both clients")
 // ---------------------------------------------------------------------------
 
+const hydrationListCursorStateSchema = z.object({
+  createdAtUtc: z.string().min(1).max(40),
+  id: z.number().int().positive(),
+  maxId: z.number().int().nonnegative(),
+}).strict();
+
+type HydrationListCursorState = z.infer<typeof hydrationListCursorStateSchema>;
+
+const HYDRATION_LIST_CURSOR_SPEC: SignedCursorSpec<HydrationListCursorState> = {
+  domain: "agency-hub:agent-hydration-list-cursor:v1",
+  state: hydrationListCursorStateSchema,
+};
+
 export async function handleAgentHydrationRequestList(
   appContext: AppContext,
-  _principal: HumanAuthPrincipal,
-  query: { state?: string | undefined; limit: number },
+  principal: HumanAuthPrincipal,
+  query: { state?: string | undefined; limit: number; cursor?: string | undefined },
 ): Promise<AgentHydrationRequestListResponse> {
   const planeMode = AGENT_PLANE_MODE;
   const db = appContext.db;
+  const ring = signedCursorKeyRing(appContext.config);
+  const now = new Date();
+  const cursorScope = {
+    state: query.state ?? null,
+    userId: principal.user.id,
+  };
 
-  const { rows, witnesses } = await withAgentTimeout(db, AGENT_TIMEOUT_MS.short, (tx) =>
-    listAgentHydrationRequests(tx, {
-      ...(query.state === undefined
-        ? {}
-        : { states: [query.state as AgentHydrationRequestRecord["state"]] }),
-      limit: query.limit,
-    }), "agent_hydration_list");
+  let decodedCursor: HydrationListCursorState | null = null;
+  if (query.cursor !== undefined) {
+    try {
+      decodedCursor = decodeSignedCursor(
+        HYDRATION_LIST_CURSOR_SPEC,
+        query.cursor,
+        { scope: cursorScope, now },
+        ring,
+      );
+    } catch (error) {
+      if (error instanceof SignedCursorInvalidError) {
+        throw new AgentCursorInvalidError();
+      }
+      throw error;
+    }
+  }
+
+  const cursorConsumed = decodedCursor !== null;
+
+  const { rows, nextBoundary, maxId, witnesses } = await withAgentTimeout(
+    db,
+    AGENT_TIMEOUT_MS.short,
+    async (tx) => {
+      const effectiveMaxId = decodedCursor?.maxId ?? await readAgentHydrationRequestHighWater(tx);
+      const listed = await listAgentHydrationRequests(tx, {
+        ...(query.state === undefined
+          ? {}
+          : { states: [query.state as AgentHydrationRequestRecord["state"]] }),
+        limit: query.limit,
+        maxId: effectiveMaxId,
+        ...(decodedCursor === null
+          ? {}
+          : { after: { createdAtUtc: decodedCursor.createdAtUtc, id: decodedCursor.id } }),
+      });
+      return { ...listed, maxId: effectiveMaxId };
+    },
+    "agent_hydration_list",
+  );
+
+  const nextCursor = nextBoundary === null
+    ? null
+    : encodeSignedCursor(
+      HYDRATION_LIST_CURSOR_SPEC,
+      {
+        scope: cursorScope,
+        state: {
+          createdAtUtc: nextBoundary.createdAtUtc,
+          id: nextBoundary.id,
+          maxId,
+        },
+        now,
+      },
+      ring,
+    );
+  const snapshotExhausted = nextCursor === null;
 
   const evidence = hydrationEvidence({
     planeMode,
     claimFields: null,
     witnesses,
     scopeNarrowing: NO_NARROWING,
+    delivery: { snapshotExhausted, nextCursor },
+    cursorConsumed,
+    cursorCapable: true,
+    frozenSnapshot: true,
   });
 
-  // A full page means MORE MAY EXIST: this list has no cursor (backlog BL-C),
-  // and the old envelope claimed an exact, exhausted snapshot at exactly the
-  // moment rows started silently falling off the end. `cappedBy: "limit"` with
-  // an inexact count is the honest half until a cursor lands.
-  const capped = rows.length >= query.limit;
   return {
     items: rows.map(toWireHydrationRequest),
-    delivery: capped
-      ? buildDelivery({
-        returned: rows.length,
-        matched: { value: rows.length, exact: false },
-        cappedBy: "limit",
-        nextCursor: null,
-        snapshotExhausted: false,
-        caveats: [],
-      })
-      : singletonDelivery(rows.length),
+    delivery: buildDelivery({
+      returned: rows.length,
+      matched: { value: rows.length, exact: !cursorConsumed && nextCursor === null },
+      cappedBy: nextCursor === null ? null : "limit",
+      nextCursor,
+      snapshotExhausted,
+      caveats: evidence.deliveryCaveats,
+    }),
     capture: evidence.capture,
     conclusion: evidence.conclusion,
   };

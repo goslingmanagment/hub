@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 
 import type { AppConfig } from "@agency_hub_core/shared";
 import { z } from "zod";
@@ -40,6 +41,9 @@ import { z } from "zod";
 export const SIGNED_CURSOR_MAX_LENGTH = 2048;
 
 const ENVELOPE_FORMAT = 1;
+const ENVELOPE_FORMAT_COMPRESSED = 2;
+/** Upper bound on inflated canonical JSON for format 2 envelopes (defense-in-depth). */
+const COMPRESSED_ENVELOPE_MAX_BYTES = 16_384;
 const SCOPED_PAYLOAD_VERSION = 1;
 const SUBKEY_DOMAIN = "agency-hub:signed-cursor-subkey:v1";
 /** One instance mints and another decodes; their clocks may disagree by this much. */
@@ -100,6 +104,13 @@ const envelopeSchema = z.object({
   mac: z.string().length(43).regex(/^[A-Za-z0-9_-]+$/),
 }).strict();
 
+const envelopeV2Schema = z.object({
+  format: z.literal(ENVELOPE_FORMAT_COMPRESSED),
+  keyVersion: z.number().int().positive(),
+  z: z.string().min(1).regex(/^[A-Za-z0-9_-]+$/),
+  mac: z.string().length(43).regex(/^[A-Za-z0-9_-]+$/),
+}).strict();
+
 function envelopeMac(
   domain: string,
   keyVersion: number,
@@ -119,21 +130,57 @@ function envelopeMac(
   return hmac.digest("base64url");
 }
 
+function envelopeMacV2(
+  domain: string,
+  keyVersion: number,
+  key: Buffer,
+  compressedBase64Url: string,
+  binding: string | undefined,
+): string {
+  const hmac = createHmac("sha256", key)
+    .update(domain, "utf8")
+    .update("\0format2\0", "utf8")
+    .update(String(keyVersion), "utf8")
+    .update("\0", "utf8")
+    .update(compressedBase64Url, "utf8");
+  if (binding !== undefined) {
+    hmac.update("\0", "utf8").update(binding, "utf8");
+  }
+  return hmac.digest("base64url");
+}
+
 /**
  * Signs `payload` (already validated by the caller) into an envelope. `binding`
  * is MACed but not carried: the decoder must present the same string.
+ *
+ * When `options.compressIfOversized` is true and the default format 1 wire
+ * representation exceeds `SIGNED_CURSOR_MAX_LENGTH`, emits format 2 (raw
+ * deflate + compress-then-MAC) so large self-describing agent cursors stay
+ * under the 2048-character wire ceiling without changing normal format 1 tokens.
  */
 export function sealCursorEnvelope(
   domain: string,
   payload: unknown,
   ring: Pick<SignedCursorKeyRing, "key" | "keyVersion">,
   binding?: string,
+  options?: { compressIfOversized?: boolean },
 ): string {
-  return Buffer.from(canonicalJson({
+  const format1 = Buffer.from(canonicalJson({
     format: ENVELOPE_FORMAT,
     keyVersion: ring.keyVersion,
     payload,
     mac: envelopeMac(domain, ring.keyVersion, ring.key, payload, binding),
+  }), "utf8").toString("base64url");
+  if (format1.length <= SIGNED_CURSOR_MAX_LENGTH || !options?.compressIfOversized) {
+    return format1;
+  }
+  const canonicalPayload = canonicalJson(payload);
+  const compressed = deflateRawSync(Buffer.from(canonicalPayload, "utf8"), { level: 9 }).toString("base64url");
+  return Buffer.from(canonicalJson({
+    format: ENVELOPE_FORMAT_COMPRESSED,
+    keyVersion: ring.keyVersion,
+    z: compressed,
+    mac: envelopeMacV2(domain, ring.keyVersion, ring.key, compressed, binding),
   }), "utf8").toString("base64url");
 }
 
@@ -163,26 +210,66 @@ export function openCursorEnvelope(
     return { ok: false, reason: "malformed" };
   }
   const envelope = envelopeSchema.safeParse(parsed);
-  if (!envelope.success || envelope.data.payload === undefined) {
+  if (envelope.success) {
+    if (envelope.data.payload === undefined) {
+      return { ok: false, reason: "malformed" };
+    }
+    // Canonical bytes only: one cursor has exactly one valid spelling.
+    if (Buffer.from(canonicalJson(envelope.data), "utf8").toString("base64url") !== text) {
+      return { ok: false, reason: "malformed" };
+    }
+    const key = ring.keysByVersion.get(envelope.data.keyVersion);
+    if (!key) {
+      return { ok: false, reason: "unknown_key_version" };
+    }
+    const expected = Buffer.from(
+      envelopeMac(domain, envelope.data.keyVersion, key, envelope.data.payload, binding),
+      "base64url",
+    );
+    const provided = Buffer.from(envelope.data.mac, "base64url");
+    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+      return { ok: false, reason: "signature" };
+    }
+    return { ok: true, payload: envelope.data.payload };
+  }
+
+  const envelopeV2 = envelopeV2Schema.safeParse(parsed);
+  if (!envelopeV2.success) {
     return { ok: false, reason: "malformed" };
   }
-  // Canonical bytes only: one cursor has exactly one valid spelling.
-  if (Buffer.from(canonicalJson(envelope.data), "utf8").toString("base64url") !== text) {
+  if (Buffer.from(canonicalJson(envelopeV2.data), "utf8").toString("base64url") !== text) {
     return { ok: false, reason: "malformed" };
   }
-  const key = ring.keysByVersion.get(envelope.data.keyVersion);
+  const compressedBytes = Buffer.from(envelopeV2.data.z, "base64url");
+  if (compressedBytes.toString("base64url") !== envelopeV2.data.z) {
+    return { ok: false, reason: "malformed" };
+  }
+  const key = ring.keysByVersion.get(envelopeV2.data.keyVersion);
   if (!key) {
     return { ok: false, reason: "unknown_key_version" };
   }
+  // Compress-then-MAC: authenticate the ciphertext BEFORE touching zlib.
   const expected = Buffer.from(
-    envelopeMac(domain, envelope.data.keyVersion, key, envelope.data.payload, binding),
+    envelopeMacV2(domain, envelopeV2.data.keyVersion, key, envelopeV2.data.z, binding),
     "base64url",
   );
-  const provided = Buffer.from(envelope.data.mac, "base64url");
+  const provided = Buffer.from(envelopeV2.data.mac, "base64url");
   if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
     return { ok: false, reason: "signature" };
   }
-  return { ok: true, payload: envelope.data.payload };
+  let payload: unknown;
+  try {
+    const inflated = inflateRawSync(compressedBytes, {
+      maxOutputLength: COMPRESSED_ENVELOPE_MAX_BYTES,
+    }).toString("utf8");
+    payload = JSON.parse(inflated);
+    if (payload === undefined || canonicalJson(payload) !== inflated) {
+      return { ok: false, reason: "malformed" };
+    }
+  } catch {
+    return { ok: false, reason: "malformed" };
+  }
+  return { ok: true, payload };
 }
 
 /** What a scoped cursor is bound to. Compared by canonical JSON, never carried. */

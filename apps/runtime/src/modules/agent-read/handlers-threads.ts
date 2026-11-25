@@ -1369,7 +1369,7 @@ export async function handleAgentCoverage(
 
     const limit = requestedLimit;
     const sourceErrors: Array<{
-      source: "page_dm_threads";
+      source: "page_dm_threads" | "observations";
       code: "statement_timeout";
       excludedFromCounts: true;
     }> = [];
@@ -1403,8 +1403,24 @@ export async function handleAgentCoverage(
 
     // Scoped to the GRANT, never deployment-wide: an ungranted page's earlier row
     // is not this key's floor and must not stand in for one.
-    const journalFloor = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+    // BL-A13: degrade via `tryAgentTimeout` alongside the main source so a slow
+    // journal floor probe reports a named `sourceErrors` entry instead of 503.
+    const journalFloorResult = await tryAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
       readAgentJournalFloor(tx, { pageIds, platform }), "agent_journal_floor");
+    if (!journalFloorResult.ok) {
+      sourceErrors.push({
+        source: "observations",
+        code: "statement_timeout",
+        excludedFromCounts: true,
+      });
+    }
+    const journalFloor = journalFloorResult.ok
+      ? journalFloorResult.value
+      : {
+        observationsFirstReceivedAt: null,
+        detachedObservationPartitions: [],
+        detachedDomainEventPartitions: [],
+      };
 
     const operationPlanes = operationPlanesFor(MESSAGE_PLANES, claimFields);
     const notRead = planesNotRead({

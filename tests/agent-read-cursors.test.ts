@@ -98,4 +98,72 @@ describe("agent read plane: cursors", () => {
     expectRefused(() => decodeAgentCursor(token, { ...expectation, pageIds: [4] }, signing));
     expectRefused(() => decodeAgentCursor(token, { ...expectation, pageIds: [4, 5, 6] }, signing));
   });
+
+  it("accepts long path resources up to 600 chars (BL-A-5)", () => {
+    const longRef = "c".repeat(500);
+    const longResource = `conversation:4:${longRef}`;
+    const token = encodeAgentCursor({
+      ...payload,
+      operation: "agentThreadMessages",
+      resource: longResource,
+      params: { ...params, conversationRef: longRef },
+    }, signing);
+    const decoded = decodeAgentCursor(token, {
+      ...expectation,
+      operation: "agentThreadMessages",
+      resource: longResource,
+    }, signing);
+    expect(decoded.resource).toBe(longResource);
+    expect(token.length).toBeLessThanOrEqual(2048);
+  });
+
+  it("compresses oversized agent cursors under the 2048-char wire limit and refuses tampering (BL-A9)", () => {
+    const pageIds = Array.from({ length: 120 }, (_, i) => i + 1);
+    const largeParams = {
+      ...params,
+      q: "searchable phrase ".repeat(30),
+      filters: Array.from({ length: 16 }, (_, i) => ({
+        field: `metric_${i}`,
+        op: "in",
+        value: ["alpha", "beta", "gamma", "delta"],
+      })),
+    };
+    const token = encodeAgentCursor({
+      ...payload,
+      pageIds,
+      params: largeParams,
+    }, signing);
+    expect(token.length).toBeLessThanOrEqual(2048);
+    const parsedEnvelope = JSON.parse(Buffer.from(token, "base64url").toString("utf8")) as { format: number };
+    expect(parsedEnvelope.format).toBe(2);
+
+    const decoded = decodeAgentCursor(token, { ...expectation, pageIds }, signing);
+    expect(decoded.params).toEqual(largeParams);
+
+    const flipped = `${token.slice(0, -1)}${token.endsWith("A") ? "B" : "A"}`;
+    expectRefused(() => decodeAgentCursor(flipped, { ...expectation, pageIds }, signing));
+  });
+
+  it("refuses to emit an uncompressible cursor that still exceeds 2048 chars (BL-A9)", () => {
+    // Deterministic high-entropy hex string that resists deflate compression.
+    let state = 0x12345678;
+    const chunks: string[] = [];
+    for (let i = 0; i < 1900; i += 1) {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      chunks.push(String.fromCharCode(33 + (state % 90)));
+    }
+    const incompressible = chunks.join("");
+    let thrown: unknown = null;
+    try {
+      encodeAgentCursor({
+        ...payload,
+        params: { ...params, q: incompressible },
+      }, signing);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).statusCode).toBe(400);
+    expect((thrown as AppError).code).toBe("agent_cursor_too_large");
+  });
 });
