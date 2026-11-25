@@ -34,9 +34,10 @@ import { slotOccurrencesOf } from "./schedule-slots.ts";
  *    every hand-in.
  * A line's amount is the person's share by the rule unless the person says
  * otherwise: «не моё» 0, «делим с…» half the net, «моё» on a near or added sale
- * the whole net (on a nobody's sale plainly; on one the rule or another
- * person's report gives to someone else it counts here and is marked disputed
- * until the other side or the owner agrees). A sale another report of the
+ * the whole net (on a nobody's sale plainly, the person's word — owner,
+ * 2026-11-26; on one the rule or another person's report gives to someone else
+ * it is disputed, counting 0, until the other side or the decider settles it;
+ * the owner's «никому» is no one's to take). A sale another report of the
  * person already holds counts 0 here. Lines keep exact mills; a page's sum is
  * its lines rounded half up to the cent, the total is the sum of the pages — so
  * the numbers a person sees and the post's lines always add up (the ledger's
@@ -218,15 +219,19 @@ export function statementAllowed(group: DraftGroup, statement: Statement): boole
 
 /**
  * What a line counts and whether it is disputed. «Моё» on a near or an added sale counts the whole net plainly when the
- * rule gives it to nobody and no other person's report holds it. Else it is disputed: it counts NOTHING until it is
- * settled (the other side's answer, an agreement, the owner's decision; review R2b-2) — the rule's owner keeps their
- * share meanwhile, so the sale is never paid to both — and the line says what it claims (`claimedMills`). Pure.
+ * rule gives it to nobody (not the owner's «никому») and no other person's report holds it: the person's word, counted
+ * at once, nobody asked (owner, 2026-11-26: «пусть пацаны решают»). Else it is disputed: it counts NOTHING until it is
+ * settled (the other side's answer, an agreement, the owner's decision; review R2b-2) — the rule's owner, or the
+ * colleague whose report holds it, keeps their share meanwhile, so the sale is never paid to both — and the line says
+ * what it claims (`claimedMills`). Pure.
  */
 export function lineAmount(input: {
   group: DraftGroup;
   netMills: number;
   shareMills: number;
   homeKind: SaleHomeKind;
+  /** The rule's reason: a nobody's sale the owner decided «никому» (`owner_nobody`) is no one's to take by a word. */
+  homeReason: SaleHomeReason;
   statement: Statement | null;
   alreadyIn: boolean;
   /** Added by the person's own hand: counts only with «моё». */
@@ -246,8 +251,10 @@ export function lineAmount(input: {
   if (input.statement !== "mine") return { amountMills: 0, disputed: false };
   // The rule's home already gives the person a share of a sale they added (agreed, decided): that share, settled.
   if (input.claimed === true && input.shareMills > 0) return { amountMills: input.shareMills, disputed: false };
-  // «Моё» on any near/added sale (including nobody's, H8): disputed, counts 0 until settled by the colleague or owner.
-  return { amountMills: 0, disputed: true, claimedMills: input.netMills };
+  // A nobody's sale no other report holds: the person's word counts it whole, at once. Anyone else's — the rule's
+  // holder, a colleague whose report holds it, the pot, a junction — waits, counting 0, until settled.
+  const plain = input.homeKind === "nobody" && input.homeReason !== "owner_nobody" && input.otherReport !== true;
+  return plain ? { amountMills: input.netMills, disputed: false } : { amountMills: 0, disputed: true, claimedMills: input.netMills };
 }
 
 /**

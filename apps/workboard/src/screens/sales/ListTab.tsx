@@ -162,6 +162,8 @@ export function ListTab() {
           ? (
             <div className="sales-list__filters">
               <Segmented<TeamSaleHomeFilterWire> label="Чьи продажи" value={home} onChange={setHome} options={shown.map((one) => ({ value: one.value, label: `${one.label} ${formatCount(counts?.[one.value] ?? 0)}` }))} />
+              {/* The owner's list of the sales nobody claimed: no longer a line of «Ждут вас» (owner, 2026-11-26). */}
+              {isOwner && home === "nobody" && <Link to="/waiting?nobody=1" className="sales-list__link">Отдать или оставить ничьими</Link>}
             </div>
           )
           : undefined}

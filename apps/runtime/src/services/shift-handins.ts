@@ -788,7 +788,6 @@ export async function setShiftReportLine(
   // «Пополам» or «отдать» with a colleague who hands shifts in the old way (no board): the decider decides — a Telegram
   // post knows decisions, not agreements (arena round 3) — and no day of silence runs.
   let oldWayTo: { userId: number; pageId: number | null } | null = null;
-  let claimableNobody: { pageId: number } | null = null;
   if (statement !== null && wordChanged) {
     // A new word: the sale must be a line of the draft that takes it — or, «моё», a sale the person may add by hand.
     const facts = await draftFacts(app.db, subject, existing, catalog, now, marks, [], agentGrant);
@@ -800,11 +799,12 @@ export async function setShiftReportLine(
       if (matched === undefined) {
         throw new NotFoundError("This sale cannot be added to this report", { reason: "not_claimable" });
       }
-      if (matched.home?.home === "nobody") claimableNobody = { pageId: matched.pageId };
+      // A nobody's sale added so is the person's by their word (owner, 2026-11-26): no question to anyone, the line
+      // counts it whole unless another person's report holds it (then the hand-in's claim is with that colleague).
     } else if (line.claimed === true ? statement !== "mine" : !statementAllowed(line.group, statement)) {
       throw new BadRequestError("This line does not take that word", { reason: "statement_not_allowed" });
     } else if (statement === "share" && line.group !== "mine" && line.sale.home.kind === "nobody") {
-      // «Пополам с» a near sale is a question to its holder; a nobody sale has none, so only «моё» (the owner decides).
+      // «Пополам с» a near sale is a question to its holder; a nobody sale has none, so only «моё» (the person's word).
       throw new BadRequestError("A sale of nobody takes only «моё»", { reason: "statement_not_allowed" });
     }
     if (statement === "mine" && note === null) throw new BadRequestError("«Это моё» needs one line of why", { reason: "note_required" });
@@ -913,30 +913,8 @@ export async function setShiftReportLine(
         await reopenSaleClaim(db, known.id, fields, now);
       }
     }
-    if (claimableNobody !== null) {
-      const fields = {
-        pageId: claimableNobody.pageId, kind: "claim" as const, claimantVersion: null, statement: "mine" as const,
-        shareWithUserId: null, claimantNote: note, claimedAt: now, sideShiftId: null,
-        state: "owner" as const, escalatedAt: now, escalatedWhy: "no_side" as const,
-      };
-      const known = (await listSaleClaims(db, { transactionIds: [input.transactionId] }))
-        .find((claim) => claim.claimantHandinId === handin.id && claim.sideUserId === null);
-      if (known === undefined) {
-        await insertSaleClaim(db, {
-          ...fields, transactionId: input.transactionId, claimantUserId: subject.shift.userId, claimantHandinId: handin.id,
-          sideUserId: null, origin: "draft",
-        }, now);
-      } else if (known.state === "withdrawn") {
-        await reopenSaleClaim(db, known.id, fields, now);
-      } else if (known.state === "asked" || known.state === "owner") {
-        await updateSaleClaim(db, known.id, {
-          claimantNote: note, statement: "mine", state: "owner",
-          escalatedAt: known.escalatedAt ?? now, escalatedWhy: known.escalatedWhy ?? "no_side",
-        }, now);
-      }
-    }
   });
-  if (oldWayTo !== null || claimableNobody !== null) await runSaleClaims(app, now).catch(() => undefined);
+  if (oldWayTo !== null) await runSaleClaims(app, now).catch(() => undefined);
   // «Общак» said or taken back: the owner's matter opens or closes now, not at the next pass.
   if (statement === "pot" || before?.statement === "pot") {
     await syncCheckMatters(app, now).catch((error: unknown) => {
@@ -976,11 +954,12 @@ async function claimableSales(db: Database, subject: Subject, actor: HandinActor
 }
 
 /**
- * «Сообщить владельцу» (H8): one service operation behind both the Workboard add-sale dialog and
- * `hub shift-report line --report-sale`. Finds a sale strictly within the caller's granted pages and realm by exact
- * `transactionRef` OR (`fan` + `amountMills`). 0 or >1 matches return the identical refusal with NO candidate list so
- * hidden sales' existence/count is never leaked. Exact 1 match adds a disputed «моё» line (counts 0) and opens an owner
- * claim without a respondent under `lockSaleSettlements`.
+ * «Добавить продажу» (H8): one service operation behind both the Workboard add-sale dialog and
+ * `hub shift-report line --report-sale`. Finds a nobody's sale strictly within the caller's granted pages and realm by
+ * exact `transactionRef` OR (`fan` + `amountMills`). 0 or >1 matches return the identical refusal with NO candidate list
+ * so hidden sales' existence/count is never leaked. Exact 1 match writes the person's «моё» on it under
+ * `lockSaleSettlements`: the person's word (owner, 2026-11-26), so the line counts the whole net like any other — no
+ * question to the owner; another person's report holding it makes the hand-in's claim one with that colleague.
  */
 export async function reportSaleToOwner(
   app: HandinApp,
@@ -1040,41 +1019,6 @@ export async function reportSaleToOwner(
       byAgentKeyId: who.byAgentKeyId,
       at: now,
     });
-    const claimFields = {
-      pageId: sale.pageId,
-      kind: "claim" as const,
-      claimantVersion: null,
-      statement: "mine" as const,
-      shareWithUserId: null,
-      claimantNote: note,
-      claimedAt: now,
-      sideShiftId: null,
-      state: "owner" as const,
-      escalatedAt: now,
-      escalatedWhy: "no_side" as const,
-    };
-    const known = (await listSaleClaims(db, { transactionIds: [sale.transactionId] }))
-      .find((claim) => claim.claimantHandinId === handin.id && claim.sideUserId === null);
-    if (known === undefined) {
-      await insertSaleClaim(db, {
-        ...claimFields,
-        transactionId: sale.transactionId,
-        claimantUserId: subject.shift.userId,
-        claimantHandinId: handin.id,
-        sideUserId: null,
-        origin: "draft",
-      }, now);
-    } else if (known.state === "withdrawn") {
-      await reopenSaleClaim(db, known.id, claimFields, now);
-    } else if (known.state === "asked" || known.state === "owner") {
-      await updateSaleClaim(db, known.id, {
-        claimantNote: note,
-        statement: "mine",
-        state: "owner",
-        escalatedAt: known.escalatedAt ?? now,
-        escalatedWhy: known.escalatedWhy ?? "no_side",
-      }, now);
-    }
     await insertHandinEvent(db, {
       handinId: handin.id,
       event: "shift_report.sale_reported",
@@ -1089,9 +1033,6 @@ export async function reportSaleToOwner(
       at: now,
     });
     return sale;
-  });
-  await runSaleClaims(app, now).catch((error: unknown) => {
-    app.logger.warn({ shiftId: subject.shift.id, transactionId: sale.transactionId, err: error instanceof Error ? error.message : String(error) }, "shift report: sale claims pass after report-sale failed");
   });
   return { transactionId: sale.transactionId, savedAt: now.toISOString() };
 }

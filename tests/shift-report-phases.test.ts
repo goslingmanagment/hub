@@ -91,7 +91,7 @@ describe("the check holds the person for 10 minutes at most", () => {
 });
 
 describe("a version made at «Подтверждаю»", () => {
-  // Viggo «моя» → «пополам с Севой» (−$24); quill «ничья» → «моя» is disputed (0, owner claim under H8).
+  // The prototype's Gengar: Viggo «моя» → «пополам с Севой» (−$24), quill «ничья» → «моя» (+$8: the person's word).
   const viggo = line(3, { netMills: 48_000 });
   const quill = line(20, { netMills: 8_000, shareMills: 0, home: "nobody" });
   const dario = line(7, { netMills: 40_000 });
@@ -100,17 +100,18 @@ describe("a version made at «Подтверждаю»", () => {
 
   it("counts the proposals the person did not decline", () => {
     const lines = confirmedLines([viggo, quill, dario], [{ ...share, state: "proposed" }, { ...mine, state: "proposed" }]);
-    expect(lines.map((one) => one.amountMills)).toEqual([24_000, 0, 40_000]);
-    expect(reportSums(lines, ["mia-2"]).totalMills).toBe(64_000);
+    expect(lines.map((one) => one.amountMills)).toEqual([24_000, 8_000, 40_000]);
+    expect(reportSums(lines, ["mia-2"]).totalMills).toBe(72_000);
     expect(lines[0]).toMatchObject({ statement: "share", shareWithUserId: 77 });
-    expect(lines[1]).toMatchObject({ statement: "mine", disputed: true, claimedMills: 8_000 });
+    expect(lines[1]).toMatchObject({ statement: "mine", disputed: false });
+    expect(lines[1]!.claimedMills).toBeUndefined();
   });
 
   it("leaves a declined proposal's line as the person had it", () => {
     const lines = confirmedLines([viggo, quill, dario], [{ ...share, state: "declined" }, { ...mine, state: "proposed" }]);
-    expect(lines.map((one) => one.amountMills)).toEqual([48_000, 0, 40_000]);
+    expect(lines.map((one) => one.amountMills)).toEqual([48_000, 8_000, 40_000]);
     expect(lines[0]!.statement).toBeNull();
-    expect(reportSums(lines, ["mia-2"]).totalMills).toBe(88_000);
+    expect(reportSums(lines, ["mia-2"]).totalMills).toBe(96_000);
   });
 
   it("never applies a late proposal (it waits for «Принять»)", () => {

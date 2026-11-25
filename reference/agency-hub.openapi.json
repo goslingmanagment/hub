@@ -201860,11 +201860,11 @@
     },
     "/api/v1/agent/shift-reports/report-sale": {
       "post": {
-        "summary": "Report an exact sale to the owner «со слов» (needs write:shift_reports)",
+        "summary": "Add an exact nobody's sale to the person's report «со слов» (needs write:shift_reports)",
         "tags": [
           "agent"
         ],
-        "description": "Exact match by transactionRef or fan + amount within the person's pages, key's grant, and realm; 0 or >1 matches return the identical 404 refusal. Adds a disputed «моё» line (counts 0) and opens an owner claim without a respondent.",
+        "description": "Exact match by transactionRef or fan + amount within the person's pages, key's grant, and realm; 0 or >1 matches return the identical 404 refusal. Writes the person's «моё» on it: the line counts the whole net like any other (another person's report holding it makes the hand-in's claim one with that colleague). No owner claim.",
         "requestBody": {
           "required": true,
           "content": {
@@ -376591,11 +376591,11 @@
     },
     "/api/v1/shift-reports/{shiftId}/report-sale": {
       "post": {
-        "summary": "«Сообщить владельцу»: report an exact sale by transactionRef or fan + amount without revealing hidden sales",
+        "summary": "«Добавить продажу»: add an exact nobody's sale by transactionRef or fan + amount without revealing hidden sales",
         "tags": [
           "client"
         ],
-        "description": "Any session (the narrow one the extension opens included) or the chat extension's device token: the person's own report to write; a reader's to read. Database only. Own shift, switched on. Matches strictly 1 sale within caller's granted pages and realm; 0 or >1 matches return the identical 404 refusal with no candidate list. On exact match, adds a disputed «моё» line (counts 0) and opens an owner claim without a respondent.",
+        "description": "Any session (the narrow one the extension opens included) or the chat extension's device token: the person's own report to write; a reader's to read. Database only. Own shift, switched on. Matches strictly 1 nobody's sale within caller's granted pages and realm; 0 or >1 matches return the identical 404 refusal with no candidate list. On exact match, writes the person's «моё» on it: the line counts the whole net like any other (another person's report holding it makes the hand-in's claim one with that colleague). No owner claim.",
         "requestBody": {
           "required": true,
           "content": {

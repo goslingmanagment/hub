@@ -123,10 +123,12 @@ describe("which statements reach another person", () => {
     expect(claims[0]!.note).toBe("договорились вчера");
   });
 
-  it("routes a disputed «моё» without a respondent to the owner, including a junction", () => {
+  it("routes a disputed «моё» without a respondent to the owner, including a junction; a plain one on a nobody's sale is no claim", () => {
     const claims = deriveClaims([
       report(101, 1, "2026-11-05 22:00", [
         line(1, { statement: "mine", amountMills: 0, claimedMills: 36_000, disputed: true, rule: { home: "nobody", reason: "no_holder", shareMills: 0, toUserId: null, senderUserId: null } }),
+        // The person's word on a nobody's sale counted plainly (owner, 2026-11-26): nobody is asked.
+        line(4, { statement: "mine", amountMills: 36_000, disputed: false, rule: { home: "nobody", reason: "no_holder", shareMills: 0, toUserId: null, senderUserId: null } }),
         line(2, { statement: "mine", amountMills: 0, claimedMills: 36_000, disputed: true, rule: { home: "decide", reason: "no_last_writer", shareMills: 0, toUserId: null, senderUserId: null } }),
         line(3, { statement: "mine", amountMills: 0, claimedMills: 36_000, disputed: true, rule: { home: "pot", reason: "post_tip", shareMills: 0, toUserId: null, senderUserId: null } }),
       ]),

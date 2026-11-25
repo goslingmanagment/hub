@@ -125,13 +125,16 @@ import { SHIFT_REPORT_AFTER_PAID_KIND, draftLineOfSale, ledgerDayPaid, pageCatal
  *    and the claims they make (sale-claim-rules.ts `deriveClaims`): a new one
  *    between two chatters is a take, settled at once like the board's; nobody
  *    to ask (or the other side not handing shifts in in Hub), the pot's, a sale
- *    counted for more than its net — the owner's at once;
+ *    counted for more than its net — the owner's at once. A «моё» on a nobody's
+ *    sale no other report holds is no claim at all: it counts plainly, the
+ *    person's word (owner, 2026-11-26);
  *  - a claim whose report no longer counts the sale is withdrawn (and made
  *    again, in the same row, when the report makes it again);
  *  - the owner's matters: ONE per disputed sale, one per report with «мимо
- *    площадки» waiting, one line a week of the sales nobody claimed on the
- *    days all of whose shifts are handed in, one of the decisions carried over
- *    from the ledger that wait to be tied to a sale; the side's notices.
+ *    площадки» waiting, one of the decisions carried over from the ledger that
+ *    wait to be tied to a sale; the side's notices. The sales nobody claimed
+ *    wait for no one (owner, 2026-11-26): the old weekly line of them
+ *    (`sale.nobody_week`) is only closed.
  * The owner's answer — first, second, halves, nobody — is a decision the rule
  * takes before itself (sale-rule.ts). Every handed-in report that counts the
  * sale then gets a new version made by the system with what the settlement
@@ -543,33 +546,15 @@ async function openNobodySales(
   return unowned.filter((sale) => !counted.has(sale.transactionId) && !decided.has(sale.transactionId) && !claimed.has(sale.transactionId));
 }
 
+/**
+ * The owner's line of the sales nobody claimed is opened no more (owner, 2026-11-26: «пусть пацаны решают»): a chatter's
+ * «моё» on such a sale counts at once, so nothing about the unclaimed ones waits for him; the list stays a screen of
+ * his (`readSaleNobody`). A line still open from before is closed, as a matter whose cause is gone.
+ */
 async function syncNobodyWeek(app: Pick<AppContext, "db">, now: Date): Promise<number> {
-  const { db } = app;
   let touched = 0;
-  const sales = await openNobodySales(db, "live");
-  const key = `${SALE_NOBODY_WEEK_KIND}:open`;
-  const want = new Set<string>();
-  if (sales.length > 0) {
-    want.add(key);
-    const mills = sales.reduce((sum, sale) => sum + sale.netMills, 0);
-    const days = [...new Set(sales.map((sale) => sale.day))].sort();
-    const opened = await openMatter(db, {
-      key,
-      kind: SALE_NOBODY_WEEK_KIND,
-      source: "server",
-      title: `Ничьи продажи: ${sales.length} на ${money(mills)}`,
-      object: null,
-      pageIds: [],
-      owner: { role: "owner" },
-      money: true,
-      evidence: { count: sales.length, totalMills: mills, days, transactionIds: sales.slice(0, 200).map((sale) => sale.transactionId) },
-      link: "/workboard/waiting?nobody=1#questions",
-    }, SYSTEM, now);
-    if (opened.transition !== "unchanged") touched += 1;
-  }
-  for (const matter of await listOpenMattersOfKinds(db, [SALE_NOBODY_WEEK_KIND])) {
-    if (want.has(matter.key)) continue;
-    const closed = await closeMatter(db, { key: matter.key, how: "resolved", writer: "server" }, SYSTEM, now);
+  for (const matter of await listOpenMattersOfKinds(app.db, [SALE_NOBODY_WEEK_KIND])) {
+    const closed = await closeMatter(app.db, { key: matter.key, how: "resolved", writer: "server" }, SYSTEM, now);
     if (closed.transition === "closed") touched += 1;
   }
   return touched;

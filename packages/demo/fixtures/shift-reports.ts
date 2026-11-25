@@ -187,7 +187,8 @@ function claimedLine(sale: Claimable, word: Word): ShiftReportLine {
     netMills: sale.netMills, fan: sale.fan,
     rule: { home: sale.home, reason: sale.home === "nobody" ? "no_holder" : "last_writer", words: sale.home === "nobody" ? "по правилу ничья" : sale.words, toUserId: null, toName: null, shareMills: 0 },
     statement: "mine", shareWithUserId: null, shareWithName: null, note: word.note,
-    amountMills: 0, claimedMills: sale.netMills, added: true, disputed: true, alreadyIn: null,
+    // A nobody's sale is the person's by their word, counted whole (owner, 2026-11-26); anyone else's waits, counting 0.
+    amountMills: sale.home === "nobody" ? sale.netMills : 0, claimedMills: sale.home === "nobody" ? null : sale.netMills, added: true, disputed: sale.home !== "nobody", alreadyIn: null,
     facts: { ppv: null, lastWriter: null, writers: [], holders: null, ownSlotRunning: null, otherReports: [], pot: null, renewalOf: null },
   };
 }

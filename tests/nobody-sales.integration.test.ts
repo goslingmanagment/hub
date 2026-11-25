@@ -1,25 +1,44 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { saleNobodyResponseSchema, shiftReportResponseSchema, type AdminPersonCreateBody } from "@agency_hub_core/contracts";
-import { assignUserToPage, createFanslyPage, createModel, insertAgentKey, syncShiftRows } from "@agency_hub_core/db";
+import { assignUserToPage, createFanslyPage, createModel, insertAgentKey, openMatter, syncShiftRows } from "@agency_hub_core/db";
 import { moscowDayOfMs, sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { AGENT_KEY_TOKEN_PREFIX, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
 import { createPerson } from "../apps/runtime/src/services/people/index.ts";
-import { cancelSaleDecisionApplied } from "../apps/runtime/src/services/sale-claims.ts";
+import { cancelSaleDecisionApplied, runSaleClaims } from "../apps/runtime/src/services/sale-claims.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { editingSession, handInAndConfirm } from "./helpers/shift-report-hand-in.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
 
 // Wave 2 PR H8: nobody's sales are hidden from chatters and team leads across all 4 reads (before LIMIT/OFFSET);
-// «Моё» on a nobody sale counts 0 (disputed) and opens an owner claim without a respondent; «Сообщить владельцу»
-// matches strictly 1 sale within caller's granted pages and realm with byte-identical refusal on 0 / >1 / outside-grant
-// / cross-realm; owner sees ALL open nobody sales regardless of week close with live solo-page suggestion; «Отдать <имя>»
-// delivers to open draft, submitted report (system version), or next shift (cancel before next shift leaves nothing).
-// Synthetic names, pages, fans and amounts only.
+// «Моё» on a nobody sale is the person's word and counts the whole net at once, no owner claim and no owner's weekly
+// line (owner, 2026-11-26); another person's report holding it makes it a claim with that colleague, never paid to
+// both; «Добавить продажу» matches strictly 1 sale within caller's granted pages and realm with byte-identical refusal on
+// 0 / >1 / outside-grant / cross-realm; owner sees ALL open nobody sales regardless of week close with live solo-page
+// suggestion; «Отдать <имя>» delivers to open draft, submitted report (system version), or next shift (cancel before
+// next shift leaves nothing). Synthetic names, pages, fans and amounts only.
+
+/** The newest handed-in version's line of a sale in a shift's report; undefined — none holds it. */
+async function newestLine(shiftId: number, transactionId: number): Promise<{ amountMills: number; disputed: boolean } | undefined> {
+  const row = await testDb!.pool.query<{ lines: Array<{ transactionId: number | null; amountMills: number; disputed: boolean }> }>(
+    `select v.lines from shift_handins h join shift_handin_versions v on v.handin_id = h.id and v.version = h.current_version
+     where h.shift_id = $1`,
+    [shiftId],
+  );
+  return row.rows[0]?.lines.find((line) => line.transactionId === transactionId);
+}
+
+/** The sale's claims, oldest first. */
+async function claimsOf(transactionId: number) {
+  return (await testDb!.pool.query(
+    "select claimant_user_id::int as claimant, side_user_id::int as side, state, escalated_why from sale_claims where transaction_id = $1 order by id",
+    [transactionId],
+  )).rows as Array<{ claimant: number; side: number | null; state: string; escalated_why: string | null }>;
+}
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -292,7 +311,7 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     expect(coraDraft.view?.lines.find((line) => line.transactionId === outsideNobody)).toBeUndefined();
   });
 
-  it("supports «Сообщить владельцу» (human + agent doors) with identical 0/>1/cross-realm refusal and opens disputed $0 line + owner claim", async (context) => {
+  it("supports «Добавить продажу» (human + agent doors) with identical 0/>1/cross-realm refusal; an exact match counts the whole net, no owner claim", async (context) => {
     if (!testDb) return context.skip();
     const now = Date.now();
     const shiftAnna = await insertShift(
@@ -326,7 +345,7 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     }
 
     expect((await testDb.pool.query("select id from sale_claims where transaction_id = $1", [agreed])).rows).toEqual([]);
-    // Exact 1 match via human door (transactionRef): disputed $0 line + owner claim without respondent.
+    // Exact 1 match via human door (transactionRef): the person's «моё», the whole net counted, nobody asked.
     const okHuman = await rawSession("anna", "POST", `/api/v1/shift-reports/${shiftAnna}/report-sale`, {
       transactionRef: "h8-rep-human", note: "общалась с фаном в чате",
     });
@@ -335,20 +354,8 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
 
     const draft = shiftReportResponseSchema.parse((await rawSession("anna", "GET", `/api/v1/shift-reports/${shiftAnna}`)).json());
     const reportedLine = draft.view?.lines.find((line) => line.transactionId === uniqueHuman);
-    expect(reportedLine).toMatchObject({
-      group: "mine", statement: "mine", amountMills: 0, disputed: true, claimedMills: 42_000,
-    });
-
-    const claims = await testDb.pool.query(
-      "select state, side_user_id, escalated_why, origin from sale_claims where transaction_id = $1",
-      [uniqueHuman],
-    );
-    expect(claims.rows).toHaveLength(1);
-    expect(claims.rows[0]).toMatchObject({ state: "owner", side_user_id: null, escalated_why: "no_side", origin: "draft" });
-
-    // Caller with their own claim CAN now read saleChain; team lead still cannot.
-    expect((await rawSession("anna", "GET", `/api/v1/sales/chain?saleId=${uniqueHuman}`)).statusCode).toBe(200);
-    expect((await rawSession("lena", "GET", `/api/v1/sales/chain?saleId=${uniqueHuman}`)).statusCode).toBe(404);
+    expect(reportedLine).toMatchObject({ group: "mine", statement: "mine", amountMills: 42_000, disputed: false, claimedMills: null });
+    expect(await claimsOf(uniqueHuman)).toEqual([]);
 
     // Exact 1 match via agent door (fan + amountMills).
     const okAgent = await asAgent("POST", "/api/v1/agent/shift-reports/report-sale", {
@@ -356,8 +363,66 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     });
     expect(okAgent.statusCode, okAgent.body).toBe(200);
     expect(okAgent.json()).toMatchObject({ transactionId: uniqueAgent });
-    const agentClaim = await testDb.pool.query("select state, side_user_id from sale_claims where transaction_id = $1", [uniqueAgent]);
-    expect(agentClaim.rows).toMatchObject([{ state: "owner", side_user_id: null }]);
+    expect(await claimsOf(uniqueAgent)).toEqual([]);
+
+    // Handed in: the version counts both whole (what the ledger accrues), and the claims' pass opens nothing for the owner.
+    await handInAndConfirm(asSession, "anna", shiftAnna);
+    await runSaleClaims(app);
+    expect(await newestLine(shiftAnna, uniqueHuman)).toMatchObject({ amountMills: 42_000, disputed: false });
+    expect(await newestLine(shiftAnna, uniqueAgent)).toMatchObject({ amountMills: 53_000, disputed: false });
+    expect(await claimsOf(uniqueHuman)).toEqual([]);
+    expect(await claimsOf(uniqueAgent)).toEqual([]);
+    expect((await testDb.pool.query("select id from matters where kind = 'sale.nobody_week' and state = 'open'")).rows).toEqual([]);
+
+    // Her own handed-in line opens the chain to her; a team lead still cannot read it.
+    expect((await rawSession("anna", "GET", `/api/v1/sales/chain?saleId=${uniqueHuman}`)).statusCode).toBe(200);
+    expect((await rawSession("lena", "GET", `/api/v1/sales/chain?saleId=${uniqueHuman}`)).statusCode).toBe(404);
+  });
+
+  it("makes a second «моё» on a nobody sale another report counts a claim with that colleague, never paid to both", async (context) => {
+    if (!testDb) return context.skip();
+    const now = Date.now();
+    const sale = await insertSale({ pageId: sharedPage, fanId: fanBeta, ref: "h8-two-reports", netMills: 30_000,
+      occurredAt: new Date(now - 3 * 3_600_000).toISOString(), home: "nobody", reason: "no_holder" });
+    const at = (hours: number) => new Date(now - hours * 3_600_000).toISOString();
+    const shiftAnna = await insertShift(users.anna!, "shared-1", at(8), at(7));
+    const shiftBella = await insertShift(users.bella!, "shared-1", at(8), at(7));
+
+    // Anna first: her word counts the whole net, nobody asked.
+    expect((await rawSession("anna", "POST", `/api/v1/shift-reports/${shiftAnna}/report-sale`, { transactionRef: "h8-two-reports", note: "мой фан" })).statusCode).toBe(200);
+    await handInAndConfirm(asSession, "anna", shiftAnna);
+    await runSaleClaims(app);
+    expect(await newestLine(shiftAnna, sale)).toMatchObject({ amountMills: 30_000, disputed: false });
+    expect(await claimsOf(sale)).toEqual([]);
+
+    // Bella says it is hers too: Anna's handed-in report holds it, so her line counts nothing in the draft and the hand-in
+    // makes it a claim with Anna — the colleague, not the owner.
+    expect((await rawSession("bella", "POST", `/api/v1/shift-reports/${shiftBella}/report-sale`, { transactionRef: "h8-two-reports", note: "тоже писала ему" })).statusCode).toBe(200);
+    const bellaDraft = shiftReportResponseSchema.parse((await rawSession("bella", "GET", `/api/v1/shift-reports/${shiftBella}`)).json());
+    expect(bellaDraft.view?.lines.find((line) => line.transactionId === sale)).toMatchObject({ statement: "mine", amountMills: 0, disputed: true, claimedMills: 30_000 });
+    await handInAndConfirm(asSession, "bella", shiftBella);
+    await runSaleClaims(app);
+    // A take of a colleague's sale (owner, 2026-11-21): written to Bella at once, Anna told and free to say «Не согласен».
+    expect(await claimsOf(sale)).toEqual([{ claimant: users.bella!, side: users.anna!, state: "agreed", escalated_why: null }]);
+    // The two reports never count it twice: Anna's got its new version without it.
+    expect(await newestLine(shiftAnna, sale)).toMatchObject({ amountMills: 0 });
+    expect(await newestLine(shiftBella, sale)).toMatchObject({ amountMills: 30_000 });
+  });
+
+  it("opens no owner's line of unclaimed nobody sales, and closes one still open", async (context) => {
+    if (!testDb) return context.skip();
+    await insertSale({ pageId: sharedPage, fanId: fanBeta, ref: "h8-week-unclaimed", netMills: 12_000,
+      occurredAt: new Date(Date.now() - 3 * 86_400_000).toISOString(), home: "nobody", reason: "no_holder" });
+    // One left open by the pass before the owner's word.
+    await openMatter(app.db, {
+      key: "sale.nobody_week:open", kind: "sale.nobody_week", source: "server", title: "Ничьи продажи: 1 на $12.00",
+      object: null, pageIds: [], owner: { role: "owner" }, money: true, evidence: { count: 1 }, link: "/workboard/waiting?nobody=1#questions",
+    }, { door: "system" });
+    await runSaleClaims(app);
+    expect((await testDb.pool.query("select state from matters where kind = 'sale.nobody_week'")).rows).toEqual([{ state: "closed" }]);
+    // The owner's list itself stays.
+    const list = saleNobodyResponseSchema.parse((await rawSession("boss", "GET", "/api/v1/sale-nobody")).json());
+    expect(list.sales.length).toBeGreaterThan(0);
   });
 
   it("shows ALL open nobody sales to the owner regardless of week close with live single-chatter suggestion", async (context) => {
@@ -655,12 +720,18 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     const annaDraft = shiftReportResponseSchema.parse((await rawSession("anna", "GET", `/api/v1/shift-reports/${shiftAnna}`)).json());
     const annaLine = annaDraft.view?.lines.find((line) => line.transactionId === earlyNobody);
     expect(annaLine).toMatchObject({ group: "near", amountMills: 0, disputed: false, fan: { alias: "Theo/UK/", name: "lincoln92_", username: "lincoln92_" } });
+    // Her «моё» on it is her word: the whole net counts at once, nobody asked (owner, 2026-11-26).
+    const said = await asSession("anna", "PUT", `/api/v1/shift-reports/${shiftAnna}/lines/${earlyNobody}`, { statement: "mine", note: "мой фан" });
+    expect(said.statusCode, said.body).toBe(200);
+    const annaSaid = shiftReportResponseSchema.parse((await rawSession("anna", "GET", `/api/v1/shift-reports/${shiftAnna}`)).json());
+    expect(annaSaid.view?.lines.find((line) => line.transactionId === earlyNobody)).toMatchObject({ statement: "mine", amountMills: 40_000, disputed: false });
+    expect(await claimsOf(earlyNobody)).toEqual([]);
 
     // Bella (who never messaged the fan) does NOT see it on shared-1.
     const bellaDraft = shiftReportResponseSchema.parse((await rawSession("bella", "GET", `/api/v1/shift-reports/${shiftBella}`)).json());
     expect(bellaDraft.view?.lines.find((line) => line.transactionId === earlyNobody)).toBeUndefined();
 
-    // «Сообщить владельцу» matches by page_alias ('Theo/UK/', 'Theo/UK', and first '/'-segment 'Theo'), while noisy '+' collisions stay 404.
+    // «Добавить продажу» matches by page_alias ('Theo/UK/', 'Theo/UK', and first '/'-segment 'Theo'), while noisy '+' collisions stay 404.
     const aliasReportSale = await insertSale({
       pageId: sharedPage, fanId: fanAliasId, ref: "h8-alias-report-1", netMills: 41_000,
       occurredAt: `${day}T08:15:00+03:00`, home: "nobody", reason: "no_holder",
@@ -680,6 +751,12 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     });
     expect(reportWithoutSlash.statusCode, reportWithoutSlash.body).toBe(200);
     expect(reportWithoutSlash.json()).toMatchObject({ transactionId: aliasReportSale2 });
+
+    // Anna hands in: her version counts the nobody sale as her own; nothing is asked of the owner.
+    await handInAndConfirm(asSession, "anna", shiftAnna);
+    await runSaleClaims(app);
+    expect(await newestLine(shiftAnna, earlyNobody)).toMatchObject({ amountMills: 40_000, disputed: false });
+    expect(await claimsOf(earlyNobody)).toEqual([]);
 
     // Waiting PPV in GET /claimable names its sender + deadline, while POST /report-sale still returns byte-identical 404 (H8).
     const now = Date.now();

@@ -638,9 +638,9 @@ export async function resendShiftReport(
  * the line and the claim is born now, from the draft (origin `draft`). A colleague the rule gives it to who hands
  * shifts in by the board is told, not asked (owner, 2026-11-21): the sale is written to the person in this same turn
  * (`settleTakeWithin`: counted for them, every handed-in report of the two that holds it following by a version), and
- * the colleague's notice opens (sale-claims.ts). A pot's sale, one with nobody to ask, a colleague who hands shifts in
- * the old way, or a sale someone else already took, disputed or had decided is the decider's at once: it waits,
- * counting nothing.
+ * the colleague's notice opens (sale-claims.ts). A nobody's sale asks no one: the word is the person's and counts at
+ * once (owner, 2026-11-26). A pot's sale, a junction's, a colleague who hands shifts in the old way, or a sale someone
+ * else already took, disputed or had decided is the decider's at once: it waits, counting nothing.
  */
 export async function askShiftReport(app: BoardApp, actor: HandinPersonActor, input: { shiftId: number; body: ShiftReportAskBody }, now: Date = new Date()): Promise<ShiftReportResponse> {
   const { subject, catalog } = await boardFor(app, actor, input.shiftId, "ask");
@@ -683,6 +683,10 @@ export async function askShiftReport(app: BoardApp, actor: HandinPersonActor, in
       handinId: handin.id, transactionId: input.body.transactionId, statement: input.body.statement,
       shareWithUserId: input.body.statement === "share" ? side : null, note, byUserId: actor.userId, byAgentKeyId: null, at: now,
     });
+    // A nobody's sale (not the owner's «никому») has no one to ask: the word is the person's and counts at once (owner,
+    // 2026-11-26), as the line's own word does — no question to the owner. Another person's report holding it makes
+    // the hand-in's claim one with that colleague.
+    if (side === null && one.sale.home.kind === "nobody" && one.sale.home.reason !== "owner_nobody") return;
     const pageId = catalog.idOf.get(one.sale.pageLabel) ?? null;
     const askable = side !== null && one.sale.home.kind !== "pot" && sideOnBoard;
     const fields = {

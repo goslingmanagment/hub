@@ -345,14 +345,7 @@ export function demoClaimMatters(now: Date): DemoClaimMatter[] {
       link: `/workboard/waiting?offPlatform=${off.shiftId}#reports`, agoMs: now.getTime() - off.addedAt,
     });
   }
-  const week = nobodyWeek(now);
-  if (week.sales.length > 0) {
-    out.push({
-      kind: "sale.nobody_week", key: "sale.nobody_week:open",
-      title: `Ничьи продажи: ${week.sales.length} на ${money(week.sales.reduce((sum, sale) => sum + sale.netMills, 0))}`,
-      pages: [], owner: { kind: "role", role: "owner" }, money: true, evidence: { count: week.sales.length }, link: "/workboard/waiting?nobody=1#questions", agoMs: 26 * HOUR_MS,
-    });
-  }
+  // The sales nobody claimed wait for no one (owner, 2026-11-26): no `sale.nobody_week` line; their list opens from «Продажи».
   if (potOffer.decided === null) {
     out.push({
       kind: "sale.pot_offer", key: `sale.pot_offer:${POT_OFFER_SALE}`, title: `${LENA().name} отдаёт продажу в общак: $24.00, ${DAY_MONTH.format(new Date(now.getTime() - 20 * HOUR_MS))}`,

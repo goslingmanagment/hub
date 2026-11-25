@@ -80,7 +80,7 @@ export type Write =
   | { op: "claim"; claimId: number; answer: "agree" | "disagree" }
   | { op: "offPlatformAdd"; body: ShiftReportOffPlatformBody }
   | { op: "offPlatformWithdraw"; offPlatformId: number }
-  /** «Сообщить владельцу» (H8): exact match by transactionRef or fan + amount. */
+  /** «Добавить продажу» (H8): exact match by transactionRef or fan + amount; the line counts like any other. */
   | { op: "reportSale"; body: ShiftReportReportSaleBody }
   /** «Скопировать пост» of one model's post: Hub remembers the copy (a later version that changes its page sums says «Пост изменился»). */
   | { op: "postCopied"; model: string };

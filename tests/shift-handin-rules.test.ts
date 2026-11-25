@@ -160,7 +160,7 @@ describe("the report's window and sales added by hand", () => {
       .toEqual({ from: Date.parse("2026-11-09T12:00:00+03:00"), to: Date.parse("2026-11-09T20:00:00+03:00"), pageIds: [11, 12] });
   });
 
-  it("hides a sale nobody held from «Рядом», exposes it at $0 when chatter messaged that fan, and keeps «моё» disputed", () => {
+  it("hides a sale nobody held from «Рядом», exposes it at $0 when chatter messaged that fan, and «моё» counts it plainly", () => {
     const nobody = sale({
       transactionId: 21, heldByShift: false, inReportWindow: true, netMills: 4_000,
       home: { kind: "nobody", reason: "no_holder", pot: null, shares: [] },
@@ -175,8 +175,9 @@ describe("the report's window and sales added by hand", () => {
     // Explicitly closed as owner_nobody or already in another report stays hidden even if messaged.
     expect(classifySale({ ...nobody, home: { kind: "nobody", reason: "owner_nobody", pot: null, shares: [] } }, context({ messagedNobodyIds: new Set([21]) }))).toBeNull();
     expect(classifySale(nobody, context({ messagedNobodyIds: new Set([21]), reported: new Map([[21, { handinId: 99, shiftId: 88, reportDate: "2026-11-10" }]]) }))).toBeNull();
-    expect(lineAmount({ group: "near", netMills: 4_000, shareMills: 0, homeKind: "nobody", statement: "mine", alreadyIn: false }))
-      .toEqual({ amountMills: 0, disputed: true, claimedMills: 4_000 });
+    // The person's word on a nobody's sale counts at once (owner, 2026-11-26): no owner's question.
+    expect(lineAmount({ group: "near", netMills: 4_000, shareMills: 0, homeKind: "nobody", homeReason: "no_holder", statement: "mine", alreadyIn: false }))
+      .toEqual({ amountMills: 4_000, disputed: false });
   });
 
   it("formats waiting PPV reason words for the sender, a named colleague, and with a deadline", () => {
@@ -195,13 +196,17 @@ describe("the report's window and sales added by hand", () => {
     })).toBe("PPV коллеги, уйдёт в следующую смену отправителя");
   });
 
-  it("counts a sale added by hand with «моё» as disputed (0 until settled), including nobody's sales", () => {
+  it("counts a sale added by hand only with «моё»: plainly when nobody's; disputed — claimed, counting nothing — when the rule or another report gives it away", () => {
     const base = { group: "mine" as const, netMills: 120_000, shareMills: 0, alreadyIn: false, claimed: true };
-    expect(lineAmount({ ...base, homeKind: "nobody", statement: "mine" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 120_000 });
-    expect(lineAmount({ ...base, homeKind: "shift", statement: "mine" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 120_000 });
-    expect(lineAmount({ ...base, homeKind: "nobody", statement: "mine", otherReport: true })).toEqual({ amountMills: 0, disputed: true, claimedMills: 120_000 });
-    expect(lineAmount({ ...base, homeKind: "nobody", statement: null })).toEqual({ amountMills: 0, disputed: false });
-    expect(lineAmount({ ...base, shareMills: 120_000, homeKind: "shift", statement: "mine" })).toEqual({ amountMills: 120_000, disputed: false });
+    expect(lineAmount({ ...base, homeKind: "nobody", homeReason: "no_holder", statement: "mine" })).toEqual({ amountMills: 120_000, disputed: false });
+    expect(lineAmount({ ...base, homeKind: "nobody", homeReason: "ppv_sender_no_shift", statement: "mine" })).toEqual({ amountMills: 120_000, disputed: false });
+    expect(lineAmount({ ...base, homeKind: "shift", homeReason: "last_writer", statement: "mine" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 120_000 });
+    // Another person's handed-in report holds it: a dispute with that colleague, never paid to both.
+    expect(lineAmount({ ...base, homeKind: "nobody", homeReason: "no_holder", statement: "mine", otherReport: true })).toEqual({ amountMills: 0, disputed: true, claimedMills: 120_000 });
+    // The owner's «никому» is no one's to take by a word.
+    expect(lineAmount({ ...base, homeKind: "nobody", homeReason: "owner_nobody", statement: "mine" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 120_000 });
+    expect(lineAmount({ ...base, homeKind: "nobody", homeReason: "no_holder", statement: null })).toEqual({ amountMills: 0, disputed: false });
+    expect(lineAmount({ ...base, shareMills: 120_000, homeKind: "shift", homeReason: "owner_claim", statement: "mine" })).toEqual({ amountMills: 120_000, disputed: false });
     const added = claimedSale(sale({ transactionId: 22, source: "before", home: { kind: "shift", reason: "last_writer", pot: null, shares: [{ userId: OTHER, workRef: "9:x", shiftId: 7, mills: 120_000 }] } }), context(), false);
     expect(added).toMatchObject({ group: "mine", added: true, claimed: true, toUserId: OTHER, shareMills: 0 });
     expect(reasonWords({ group: "mine", added: true, reason: "owner_claim", homeKind: "shift", toName: null, senderName: null, alreadyIn: null })).toBe("отдано владельцем");
@@ -209,17 +214,21 @@ describe("the report's window and sales added by hand", () => {
 });
 
 describe("what a line counts", () => {
-  const base = { netMills: 40_000, shareMills: 40_000, homeKind: "shift" as const, alreadyIn: false };
+  const base = { netMills: 40_000, shareMills: 40_000, homeKind: "shift" as const, homeReason: "holder" as const, alreadyIn: false };
   it("is the share by the rule, 0 for «не моё», half the net for «делим с…»", () => {
     expect(lineAmount({ ...base, group: "mine", statement: null })).toEqual({ amountMills: 40_000, disputed: false });
     expect(lineAmount({ ...base, group: "mine", statement: "not_mine" })).toEqual({ amountMills: 0, disputed: false });
     expect(lineAmount({ ...base, group: "mine", statement: "share" })).toEqual({ amountMills: 20_000, disputed: false });
     expect(lineAmount({ ...base, netMills: 7_201, group: "mine", statement: "share" }).amountMills).toBe(3_601);
   });
-  it("counts «моё» on any near sale as disputed (0 until settled), including nobody's", () => {
-    expect(lineAmount({ ...base, shareMills: 0, homeKind: "nobody", group: "near", statement: "mine" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 40_000 });
+  it("counts «моё» on a near sale whole when nobody's; when someone else's it is disputed: claimed, counting nothing until settled", () => {
+    const nobodys = { ...base, shareMills: 0, homeKind: "nobody" as const, homeReason: "no_holder" as const, group: "near" as const, statement: "mine" as const };
+    expect(lineAmount(nobodys)).toEqual({ amountMills: 40_000, disputed: false });
+    expect(lineAmount({ ...nobodys, otherReport: true })).toEqual({ amountMills: 0, disputed: true, claimedMills: 40_000 });
+    expect(lineAmount({ ...nobodys, homeReason: "owner_nobody" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 40_000 });
     expect(lineAmount({ ...base, shareMills: 0, homeKind: "shift", group: "near", statement: "mine" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 40_000 });
-    expect(lineAmount({ ...base, shareMills: 0, homeKind: "pot", group: "near", statement: "mine" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 40_000 });
+    expect(lineAmount({ ...base, shareMills: 0, homeKind: "pot", homeReason: "post_tip", group: "near", statement: "mine" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 40_000 });
+    expect(lineAmount({ ...base, shareMills: 0, homeKind: "decide", homeReason: "no_last_writer", group: "near", statement: "mine" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 40_000 });
     expect(lineAmount({ ...base, shareMills: 0, group: "near", statement: null })).toEqual({ amountMills: 0, disputed: false });
   });
   it("counts nothing of a sale another report holds", () => {
@@ -247,14 +256,14 @@ describe("the draft's lines and sums", () => {
     expect(lines.map((line) => [line.transactionId, line.group, line.statement, line.amountMills, line.disputed, line.claimedMills ?? null])).toEqual([
       [1, "mine", "share", 20_000, false, null],
       [2, "mine", null, 10_000, false, null],
-      [3, "mine", "mine", 0, true, 40_000],
+      [3, "mine", "mine", 40_000, false, null],
     ]);
     expect(lines[0]!.shareWithUserId).toBe(OTHER);
     expect(lines[1]!.note).toBe("обещал вернуться");
     const sums = pageSums(lines.filter((line) => line.group === "mine" || line.amountMills !== 0), ["page-1", "page-2", "page-3"]);
     expect(sums).toEqual({
-      pages: [{ pageLabel: "page-1", amountMills: 20_000 }, { pageLabel: "page-2", amountMills: 10_000 }, { pageLabel: "page-3", amountMills: 0 }],
-      totalMills: 30_000,
+      pages: [{ pageLabel: "page-1", amountMills: 60_000 }, { pageLabel: "page-2", amountMills: 10_000 }, { pageLabel: "page-3", amountMills: 0 }],
+      totalMills: 70_000,
     });
   });
 });
