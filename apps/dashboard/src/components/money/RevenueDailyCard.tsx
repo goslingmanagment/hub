@@ -54,8 +54,10 @@ function monthlyPoints(current: Series): RevenueLinePoint[] {
  * total from the server, «Числа таблицей». `scope` is what `useRevenueChart` reads:
  * `agency`, `model:<slug>`, `page:<label>`. Reads only; the caller holds the choice.
  */
-export function RevenueDailyCard({ scope, period, windowAt, windows, totalMills, select, allowMonthly = false, onShowWeek, goal, enabled = true }: {
+export function RevenueDailyCard({ scope, title = "Доход по дням", period, windowAt, windows, totalMills, select, allowMonthly = false, onShowWeek, goal, enabled = true }: {
   scope: string;
+  /** The card's heading: «Доход по дням» unless the card is one of several. */
+  title?: string;
   period: string;
   /** The report's clock: the chart and the report cannot disagree about «today». */
   windowAt: string | undefined;
@@ -91,10 +93,10 @@ export function RevenueDailyCard({ scope, period, windowAt, windows, totalMills,
   const previousLabel = compared && previousSeries ? revenueComparisonRange(main) ?? undefined : undefined;
 
   return (
-    <section className="card" aria-label="Доход по дням">
+    <section className="card" aria-label={title}>
       <div className="card-header">
         <div className="min-w-0">
-          <h2 className="card-title">Доход по дням</h2>
+          <h2 className="card-title">{title}</h2>
           {totalMills !== null && totalMills !== undefined && (
             <p className="card-description">Итого за период: <span className="font-medium text-text-primary tabular-nums">{formatMills(totalMills)}</span></p>
           )}
@@ -126,7 +128,7 @@ export function RevenueDailyCard({ scope, period, windowAt, windows, totalMills,
                   </p>
                 )}
                 <ChartTable
-                  caption="Доход по дням"
+                  caption={title}
                   rows={points}
                   rowKey={(point) => point.date}
                   columns={[
