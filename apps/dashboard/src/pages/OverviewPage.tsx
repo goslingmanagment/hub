@@ -211,7 +211,7 @@ function AgencyChart({ report, period, scope, onScope, onShowWeek }: {
   const windows = selectedPage?.platform
     ? report.platformWindows.filter((window) => window.platform === selectedPage.platform)
     : selectedModel
-      ? report.platformWindows.filter((window) => report.pages.some((page) => page.modelSlug === selectedModel.modelSlug && page.platform === window.platform))
+      ? modelWindows(report, selectedModel.modelSlug)
       : report.platformWindows;
   return (
     <div id="overview-chart">
@@ -227,6 +227,35 @@ function AgencyChart({ report, period, scope, onScope, onShowWeek }: {
         enabled={valid}
       />
       {!valid && period !== "today" && <p className="home-footnote mt-2">Для этого выбора график недоступен.</p>}
+    </div>
+  );
+}
+
+/** The windows of one model's pages: its platforms' only. */
+function modelWindows(report: Report, modelSlug: string) {
+  return report.platformWindows.filter((window) => report.pages.some((page) => page.modelSlug === modelSlug && page.platform === window.platform));
+}
+
+/** Under the agency's chart, each working model's own line: its trend at a glance (owner, 2026-11-26). */
+function ModelCharts({ report, period }: { report: Report; period: PeriodOption }) {
+  if (period === "today") return null;
+  const models = report.models
+    .filter((model) => model.status !== "retired" && (model.netEarningsMills !== 0 || Boolean(model.previousNetEarningsMills)))
+    .sort((a, b) => b.netEarningsMills - a.netEarningsMills || a.modelSlug.localeCompare(b.modelSlug));
+  if (models.length < 2) return null;
+  return (
+    <div className="grid gap-6 xl:grid-cols-2">
+      {models.map((model) => (
+        <RevenueDailyCard
+          key={model.modelSlug}
+          scope={`model:${model.modelSlug}`}
+          title={model.modelName}
+          period={period}
+          windowAt={report.windowAt}
+          windows={modelWindows(report, model.modelSlug)}
+          totalMills={model.netEarningsMills}
+        />
+      ))}
     </div>
   );
 }
@@ -529,6 +558,7 @@ export function OverviewPage() {
           onScope={(scope) => update({ chart: scope })}
           onShowWeek={() => screenPeriod.select("7d")}
         />
+        <ModelCharts report={report} period={period} />
         {kinds.length > 0 && (
           <section className="card" aria-labelledby="home-kinds-title">
             <div className="card-header">
