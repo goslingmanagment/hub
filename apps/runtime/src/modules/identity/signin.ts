@@ -3,7 +3,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 
 import { auditCtx } from "../../api/request-auth.ts";
 import type { AppContext } from "../../bootstrap.ts";
-import { SESSION_COOKIE_NAME, isAgentPrincipal, requireDeviceTokenUser, readSessionIdentity } from "../../services/auth.ts";
+import { SESSION_COOKIE_NAME, requireDeviceTokenUser, readSessionIdentity } from "../../services/auth.ts";
 import { isTestPrincipal, userIsTest } from "../../services/sandbox/realm.ts";
 import { AppError, BadRequestError } from "../../services/errors.ts";
 import { PERSON_CLIENT, contentopsWaitingOf, personForContentops } from "../../services/signin-person.ts";
@@ -267,7 +267,8 @@ export function registerSigninRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request, reply) => {
     reply.header("cache-control", "no-store");
     const principal = await ctx.auth.resolvePrincipal(request);
-    if (!principal || isAgentPrincipal(principal)) {
+    // A person alone: an agent key and the owner's agent door's key (`act:owner`) are nobody here.
+    if (!principal || principal.kind !== undefined) {
       return reply.code(401).send({ error: "unauthorized", message: "Not signed in", statusCode: 401 });
     }
     if (isTestPrincipal(principal)) {
