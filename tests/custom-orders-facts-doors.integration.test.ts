@@ -16,9 +16,10 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // Customs facts (slice 2): what an agent names for an order is a sale or a message Hub holds, and Hub checks it — the
 // sale is the order's fan's (any account of the person), on a page of the order's model among the key's pages, held by
 // no other order, not reversed, not taken off by a person; a key without read:money links nothing, and a create never
-// fails because of a sale. «Отдан» by a message: a priced one bought, none while a file carries the order's code,
-// another account of the same person counts. An undo of what an agent applied is remembered until a person applies it
-// again by hand; a revision of a given order takes «отдан» off it. Every name and number here is invented.
+// fails because of a sale. «Отдан» by a message: a priced one bought; while a file carries the order's code, only a
+// message that carried one of those files; another account of the same person counts. An undo of what an agent applied
+// is remembered until a person applies it again by hand; a revision of a given order takes «отдан» off it. Every name
+// and number here is invented.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -213,6 +214,61 @@ describe("custom orders: what an agent names, checked; undo remembered", () => {
     expect(named.json()).toMatchObject({ reason: "code_named_file" });
     const states = await testDb.pool.query("select id, state from custom_orders where id = any($1::bigint[]) order by id", [[orders.priced, orders.named]]);
     expect(states.rows.map((row) => row.state)).toEqual(["recorded", "recorded"]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("takes the agent's «отдан» by a message that carried the order's own code-named file, though raw parts named with the code never went", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const q = (text: string, values: unknown[] = []) => testDb!.pool.query(text, values);
+    const id = await recordCustomOrder(app, {
+      pageId: pages["vela-1"]!, fanId: fans.a!, buyer: null, conversationRef: null, card: { task: "Ролик из двух частей" }, deadlineOn: null,
+      state: "shot", acceptedByUserId: bossId, origin: "agent", actor: { door: "system" }, createdAt: new Date(Date.now() - 180 * 60_000),
+    });
+    /** A vault file of the order's page named with its code, uploaded after the order. */
+    const file = (mediaRef: string, filename: string, hash: string) => q(
+      `insert into creator_raw_media (page_id, platform, media_ref, filename, created_at_platform, source_kind, first_origin, first_observed_at,
+         last_observed_at, content_hash, source_event_id, source_observation_id, source_account_seq)
+       values ($1, 'fansly', $2, $3, $4, 'vault_media', 'vault', now(), now(), $5, 1, 1, 1)`,
+      [pages["vela-1"], mediaRef, filename, minutesAgo(120), hash]);
+    // Two raw parts and the finished file cut from them, all named with the code; only the finished one was sent.
+    await file("media-part-1", `clip_K-${id}_custom_1.mp4`, "3".repeat(64));
+    await file("media-part-2", `clip_K-${id}_custom_2.mp4`, "4".repeat(64));
+    await file("media-final", `clip_K-${id}_custom.mp4`, "5".repeat(64));
+    await q(`insert into creator_media (page_id, platform, media_offer_ref, media_ref, bundle_refs, first_origin, first_observed_at,
+               last_observed_at, content_hash, source_event_id, source_observation_id, source_account_seq)
+             values ($1, 'fansly', '9700000010', 'media-final', '{}'::text[], 'dm_sidecar', now(), now(), $2, 1, 1, 1)`,
+    [pages["vela-1"], "6".repeat(64)]);
+    /** A page's message with media to fan A, priced in its media offer when it carries one. */
+    const message = async (messageRef: string, at: string, offerRef: string | null) => {
+      await q(`insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain,
+                 media_metadata, message_type, is_tip, tip_amount_mills, price_mills)
+               values ($1, 'fansly', 'conv-a', $2, 'model', true, $3, '', '[{"id": "1"}]'::jsonb, 1, false, 0, null)`,
+      [pages["vela-1"], messageRef, at]);
+      if (offerRef === null) return;
+      await q(`insert into message_media_offers (page_id, platform, message_ref, offer_ordinal, media_offer_ref, conversation_ref, fan_platform_user_id,
+                 message_created_at, price_mills, purchase_state, first_observed_at, last_observed_at, content_hash, source_event_id,
+                 source_observation_id, source_account_seq)
+               values ($1, 'fansly', $2, 0, $3, 'conv-a', '7400000999', $4, 1000, 'purchased', now(), now(), $5, 1, 1, 1)`,
+      [pages["vela-1"], messageRef, offerRef, at, "7".repeat(64)]);
+    };
+    await message("9600000010", minutesAgo(30), "9700000010");
+    // The fan bought the finished file.
+    const purchase = Number((await q(
+      `insert into transactions (platform_account_id, fan_id, transaction_id, correlation_id, raw_type, canonical_type, transaction_state, raw_status,
+         gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, occurred_at, source, currency)
+       values ($1, $2, 'tx-buy-final', '9700000010', 'message_purchase', 'message_purchase', 'posted', 'ok', 1000, 1000, 800, $3, 'fansly:rest', 'USD') returning id`,
+      [pages["vela-1"], fans.a, minutesAgo(20)],
+    )).rows[0].id);
+    // A message with media that carried none of the order's files: Hub's own rule still decides, the agent's word does not.
+    await message("9600000011", minutesAgo(25), null);
+    const other = await agent(`/api/v1/agent/custom-orders/K-${id}`, { action: "given", messageRef: "9600000011" });
+    expect(other.statusCode, other.body).toBe(409);
+    expect(other.json()).toMatchObject({ reason: "code_named_file" });
+
+    // The message that carried the finished file: Hub's own evidence, so «отдан» by it with its purchase as the payment.
+    const given = await agent(`/api/v1/agent/custom-orders/K-${id}`, { action: "given", messageRef: "9600000010" });
+    expect(given.statusCode, given.body).toBe(200);
+    expect(agentCustomOrderResponseSchema.parse(given.json()).order).toMatchObject({ state: "given", givenMessageRef: "9600000010" });
+    expect((await q("select transaction_id from custom_order_payments where order_id = $1", [id])).rows.map((row) => Number(row.transaction_id))).toEqual([purchase]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("remembers a person's undo of what the agent applied until the person applies it again, and a revision takes «отдан» off", async (context) => {
