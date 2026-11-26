@@ -236,28 +236,27 @@ function modelWindows(report: Report, modelSlug: string) {
   return report.platformWindows.filter((window) => report.pages.some((page) => page.modelSlug === modelSlug && page.platform === window.platform));
 }
 
-/** Under the agency's chart, each working model's own line: its trend at a glance (owner, 2026-11-26). */
+/** Models whose own chart the owner does not follow (owner, 2026-11-26); they stay in the chart's choice. */
+const HOME_CHART_HIDDEN_MODELS: ReadonlySet<string> = new Set(["Lilly"]);
+
+/** Under the agency's chart, each working model's own line, full width one under another: its trend at a glance (owner, 2026-11-26). */
 function ModelCharts({ report, period }: { report: Report; period: PeriodOption }) {
   if (period === "today") return null;
   const models = report.models
-    .filter((model) => model.status !== "retired" && (model.netEarningsMills !== 0 || Boolean(model.previousNetEarningsMills)))
+    .filter((model) => model.status !== "retired" && !HOME_CHART_HIDDEN_MODELS.has(model.modelSlug))
+    .filter((model) => model.netEarningsMills !== 0 || Boolean(model.previousNetEarningsMills))
     .sort((a, b) => b.netEarningsMills - a.netEarningsMills || a.modelSlug.localeCompare(b.modelSlug));
-  if (models.length < 2) return null;
-  return (
-    <div className="grid gap-6 xl:grid-cols-2">
-      {models.map((model) => (
-        <RevenueDailyCard
-          key={model.modelSlug}
-          scope={`model:${model.modelSlug}`}
-          title={model.modelName}
-          period={period}
-          windowAt={report.windowAt}
-          windows={modelWindows(report, model.modelSlug)}
-          totalMills={model.netEarningsMills}
-        />
-      ))}
-    </div>
-  );
+  return models.map((model) => (
+    <RevenueDailyCard
+      key={model.modelSlug}
+      scope={`model:${model.modelSlug}`}
+      title={model.modelName}
+      period={period}
+      windowAt={report.windowAt}
+      windows={modelWindows(report, model.modelSlug)}
+      totalMills={model.netEarningsMills}
+    />
+  ));
 }
 
 export function OverviewPage() {
