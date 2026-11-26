@@ -196,6 +196,15 @@ export function hubReportEvidenceOf(report: Pick<CurrentReport, "version" | "lin
   return { version: report.version, status };
 }
 
+/**
+ * The handed-in reports that count a nobody's sale by the person's word (a «моё» counts the whole net at once, and the
+ * rule's home stays nobody's): each newest version whose line on the sale counts more than 0, oldest first. Pure.
+ */
+export function reportsCountingByWord(sale: Pick<HandinSaleRow, "transactionId" | "home">, reports: readonly CurrentReport[]): CurrentReport[] {
+  if (sale.home?.home !== "nobody") return [];
+  return reports.filter((report) => report.lines.some((line) => line.transactionId === sale.transactionId && line.alreadyIn == null && line.amountMills > 0));
+}
+
 /** The latest counted line across a person's logins, falling back to a report that only references the sale. */
 export function reportHoldingSale(reports: readonly CurrentReport[], logins: readonly number[], transactionId: number): CurrentReport | null {
   let mentioned: CurrentReport | null = null;
@@ -494,9 +503,18 @@ export async function readSaleChain(
   const sale = (await listHandinSalesByIds(db, [id]))[0];
   if (sale === undefined) throw notFound();
 
-  // Who may see it: the owner every sale; the others a sale of their pages; a chatter only one of theirs.
-  const people = sale.home === null ? [] : [...new Set(sale.home.shares.map((share) => share.userId))];
   const reports = await listCurrentReportsOfSales(db, [sale.transactionId]);
+  // A nobody's sale a handed-in report counts by the person's word: that report's login is shown as a share of the
+  // line's amount (no work; the report's shift), so its report, accrual and payout are read as any other's.
+  const byWord = reportsCountingByWord(sale, reports).map((report) => ({
+    userId: report.userId,
+    workRef: null,
+    shiftId: report.shiftId,
+    mills: report.lines.find((line) => line.transactionId === sale.transactionId)!.amountMills,
+  }));
+  const shares = [...(sale.home?.shares ?? []), ...byWord];
+  // Who may see it: the owner every sale; the others a sale of their pages; a chatter only one of theirs.
+  const people = [...new Set(shares.map((share) => share.userId))];
   const claims = (await listSaleClaims(db, { transactionIds: [sale.transactionId] })).filter((claim) => claim.state !== "withdrawn");
   let ownLogins: number[] = [];
   if (viewer.kind !== "owner" && !viewer.pageIds.includes(sale.pageId)) throw notFound();
@@ -545,7 +563,7 @@ export async function readSaleChain(
   let allModels: HubModel[] | null = null;
   const out: SaleChainResponse["people"] = [];
   for (const userId of shown) {
-    const share = sale.home!.shares.find((one) => one.userId === userId)!;
+    const share = shares.find((one) => one.userId === userId)!;
     const own = viewer.kind === "chatter";
     const sums: ChainSums = {
       share: true,
@@ -624,7 +642,7 @@ export async function readSaleChain(
     out.push({
       userId,
       name: names.get(userId) ?? person?.displayName ?? `#${userId}`,
-      shareMills: sums.share ? sale.home!.shares.filter((one) => one.userId === userId).reduce((sum, one) => sum + one.mills, 0) : null,
+      shareMills: sums.share ? shares.filter((one) => one.userId === userId).reduce((sum, one) => sum + one.mills, 0) : null,
       reportDate,
       shift: shiftLinkOf({ shift, workRef: share.workRef, own, transactionId: sale.transactionId, kind: sale.home!.home }),
       report,
@@ -634,7 +652,9 @@ export async function readSaleChain(
   }
 
   let note: string | null = null;
-  if (sale.home === null || people.length === 0) {
+  if (byWord.length > 0) {
+    note = "ничья по правилу; в отчёте по слову";
+  } else if (sale.home === null || people.length === 0) {
     switch (sale.home?.home) {
       case "pot": {
         const { potsFrom } = await readPotsSwitch(db);

@@ -26,7 +26,7 @@ import type { AuthPrincipal } from "./auth.ts";
 import { teamReadPages } from "./chatter-shifts.ts";
 import { BadRequestError } from "./errors.ts";
 import { readTeamLedgerReports } from "./ledger-team-reports.ts";
-import { TEST_REALM_NO_MONEY, homeLinkOf, hubReportLinkOf, postReportLinkOf, reportHoldingSale, type ChainSums } from "./sale-chain.ts";
+import { TEST_REALM_NO_MONEY, homeLinkOf, hubReportLinkOf, postReportLinkOf, reportHoldingSale, reportsCountingByWord, type ChainSums } from "./sale-chain.ts";
 import { realmOf } from "./sandbox/realm.ts";
 import { requireTeamReader } from "./teams.ts";
 
@@ -140,6 +140,7 @@ export async function readTeamSalesList(
   const shareUsers = [...new Set(shown.flatMap((sale) => sale.home?.shares.map((share) => share.userId) ?? []))];
   const names = await listHandinNames(db, [
     ...shareUsers,
+    ...shown.flatMap((sale) => reportsCountingByWord(sale, reports).map((report) => report.userId)),
     ...claims.flatMap((claim) => [claim.claimantUserId, claim.sideUserId].filter((one): one is number => one !== null)),
     ...[...decisions.values()].flatMap((decision) => decision.shares.map((share) => share.userId)),
   ]);
@@ -188,8 +189,14 @@ export async function readTeamSalesList(
       ownerReads: owner,
     });
     const share = reportPersonOf(sale);
+    // A nobody's sale a handed-in report counts by the person's word: that report, as the chain shows it.
+    const byWord = reportsCountingByWord(sale, reports).at(-1) ?? null;
     let report: SaleChainLink;
-    if (share === null) {
+    if (share === null && byWord !== null) {
+      const sums: ChainSums = { share: true, hubLine: true, post: owner || viewer.logins.includes(byWord.userId), pay: false };
+      const link = hubReportLinkOf({ report: byWord, transactionId: sale.transactionId, own: false, sums });
+      report = { ...link, words: `${names.get(byWord.userId) ?? `#${byWord.userId}`}: ${link.words}` };
+    } else if (share === null) {
       report = noReportOf(sale, { potsFrom, owner });
     } else {
       const mine = viewer.logins.includes(share.userId);

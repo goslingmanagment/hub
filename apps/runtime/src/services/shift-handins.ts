@@ -957,7 +957,8 @@ async function claimableSales(db: Database, subject: Subject, actor: HandinActor
  * «Добавить продажу» (H8): one service operation behind both the Workboard add-sale dialog and
  * `hub shift-report line --report-sale`. Finds a nobody's sale strictly within the caller's granted pages and realm by
  * exact `transactionRef` OR (`fan` + `amountMills`). 0 or >1 matches return the identical refusal with NO candidate list
- * so hidden sales' existence/count is never leaked. Exact 1 match writes the person's «моё» on it under
+ * so hidden sales' existence/count is never leaked; a sale another handed-in report of the person already counts is no
+ * match either (the same refusal), however old that report. Exact 1 match writes the person's «моё» on it under
  * `lockSaleSettlements`: the person's word (owner, 2026-11-26), so the line counts the whole net like any other — no
  * question to the owner; another person's report holding it makes the hand-in's claim one with that colleague.
  */
@@ -995,6 +996,7 @@ export async function reportSaleToOwner(
       pageIds,
       realm,
       ...(ref !== "" ? { transactionRef: ref } : { fan, amountMills: input.amountMills }),
+      ownReports: { userIds: subject.userIds, exceptShiftId: subject.shift.id },
       limit: 2,
     });
     // Security invariant (H8): 0 matches, >1 matches, out-of-grant, and cross-realm all return the exact same error.

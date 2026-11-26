@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { saleNobodyResponseSchema, shiftReportResponseSchema, type AdminPersonCreateBody } from "@agency_hub_core/contracts";
-import { assignUserToPage, createFanslyPage, createModel, insertAgentKey, openMatter, syncShiftRows } from "@agency_hub_core/db";
+import {
+  assignUserToPage, createFanslyPage, createModel, ensureHandin, findHandinPersonOfUser, insertAgentKey, openMatter, setHandinMark, syncShiftRows,
+} from "@agency_hub_core/db";
 import { moscowDayOfMs, sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -805,6 +807,47 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     const rWait = await rawSession("anna", "POST", `/api/v1/shift-reports/${shiftAnnaRecent}/report-sale`, { transactionRef: "h8-wait-ppv-1", note: "моя" });
     expect(rWait.statusCode).toBe(404);
     expect(rWait.body).toBe(rMiss.body);
+  });
+
+  it("never counts one nobody's sale twice for one person, however old the report that counts it", async (context) => {
+    if (!testDb) return context.skip();
+    const now = Date.now();
+    const at = (hours: number) => new Date(now - hours * 3_600_000).toISOString();
+    const fanTwice = await insertFan(soloPage, "901010", "fan_twice", "Twice Fan");
+    // A nobody's sale 16 days ago, counted by Anna's word in her report of that day.
+    const sale = await insertSale({ pageId: soloPage, fanId: fanTwice, ref: "h8-twice", netMills: 36_000, occurredAt: at(16 * 24), home: "nobody", reason: "no_holder" });
+    const first = await insertShift(users.anna!, "solo-1", at(16 * 24 - 1), at(16 * 24 - 2));
+    expect((await rawSession("anna", "POST", `/api/v1/shift-reports/${first}/report-sale`, { transactionRef: "h8-twice", note: "мой фан" })).statusCode).toBe(200);
+    await handInAndConfirm(asSession, "anna", first);
+    expect(await newestLine(first, sale)).toMatchObject({ amountMills: 36_000, disputed: false });
+
+    // The owner's chain and list show the report that counts it; the list's nobody's sales leave it out.
+    const reportLink = `/workboard/report/${first}?sale=${sale}`;
+    const chain = (await rawSession("boss", "GET", `/api/v1/sales/chain?saleId=${sale}`)).json() as { people: Array<{ userId: number; report: { link: string | null } }> };
+    expect(chain.people).toEqual([expect.objectContaining({ userId: users.anna!, report: expect.objectContaining({ link: reportLink }) })]);
+    const day = moscowDayOfMs(Date.parse(at(16 * 24)));
+    const listOf = async (home: string) => (await rawSession("boss", "GET", `/api/v1/team/sales/list?from=${day}&to=${day}&home=${home}`)).json() as {
+      sales: Array<{ transactionId: number; report: { link: string | null } }>;
+    };
+    expect((await listOf("all")).sales.find((one) => one.transactionId === sale)?.report.link).toBe(reportLink);
+    expect((await listOf("nobody")).sales.map((one) => one.transactionId)).not.toContain(sale);
+
+    // More than 10 days on, «Добавить продажу» on a new shift refuses it as it refuses a sale that does not exist.
+    const second = await insertShift(users.anna!, "solo-1", at(26), at(25));
+    const missing = await rawSession("anna", "POST", `/api/v1/shift-reports/${second}/report-sale`, { transactionRef: "h8-twice-missing", note: "мой фан" });
+    const again = await rawSession("anna", "POST", `/api/v1/shift-reports/${second}/report-sale`, { transactionRef: "h8-twice", note: "мой фан" });
+    expect(again.statusCode).toBe(404);
+    expect(again.body).toBe(missing.body);
+
+    // A «моё» on it there all the same (a word written before the refusal): «уже в отчёте», it counts 0.
+    const person = await findHandinPersonOfUser(app.db, users.anna!);
+    const handin = await ensureHandin(app.db, { shiftId: second, userId: users.anna!, personId: person!.personId, reportDate: moscowDayOfMs(Date.parse(at(26))) });
+    await setHandinMark(app.db, { handinId: handin.id, transactionId: sale, statement: "mine", shareWithUserId: null, note: "мой фан", byUserId: users.anna!, byAgentKeyId: null, at: new Date() });
+    const draft = shiftReportResponseSchema.parse((await rawSession("anna", "GET", `/api/v1/shift-reports/${second}`)).json());
+    expect(draft.view?.lines.find((line) => line.transactionId === sale)).toMatchObject({ statement: "mine", amountMills: 0, alreadyIn: { shiftId: first } });
+    await handInAndConfirm(asSession, "anna", second);
+    expect(await newestLine(second, sale)).toMatchObject({ amountMills: 0 });
+    expect(await newestLine(first, sale)).toMatchObject({ amountMills: 36_000 });
   });
 
   it("enforces agent key page grants on shift-report draft reads and line writes even when the chatter has a solo page", async (context) => {
