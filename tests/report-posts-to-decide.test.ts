@@ -50,4 +50,13 @@ describe("the posts that wait for the owner (reportPostItems)", () => {
   it("never holds a post the ledger used (no blocking flag), whatever its day", () => {
     expect(waiting(posts, "2026-11-01")).toEqual([1, 2, 3, 4, 5]);
   });
+
+  it("never holds a post whose day accrues from Hub's handed-in report (the ledger's accrues false); an older ledger's post without it waits", () => {
+    const board = [
+      { ...post(7, "2026-11-08", msk("2026-11-09", "00:30")), accrues: false },
+      { ...post(8, "2026-11-08", msk("2026-11-09", "00:40")), accrues: true },
+      post(9, "2026-11-08", msk("2026-11-09", "00:50")),
+    ];
+    expect(waiting(board, "2026-11-01")).toEqual([8, 9]);
+  });
 });
