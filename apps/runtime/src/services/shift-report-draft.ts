@@ -7,6 +7,7 @@ import {
   findPersonRowByCode,
   isTestUser,
   listActiveSaleDecisions,
+  listCountedSalesOfUsers,
   listHandinLastWrites,
   listHandinMarks,
   listHandinNames,
@@ -481,6 +482,21 @@ export async function draftFacts(
       return pageId === undefined || fanRef === null ? [] : [{ transactionId: sale.transactionId, pageId, fanRef, at: new Date(sale.occurredAt) }];
     });
     messagedNobodyIds = await listSalesMessagedByUsers(db, { userIds: subject.userIds, sales: checkSales });
+  }
+  // A sale another handed-in report of the person counts already, however long ago (`reported` reads ~10 days back):
+  // a «моё» on it here — added by hand, or said of a nobody's sale nearby, whose home a word never moves — is
+  // «уже в отчёте» and counts 0, so one person is never paid for one sale twice.
+  const counted = await listCountedSalesOfUsers(db, {
+    userIds: subject.userIds,
+    transactionIds: [
+      ...marks.filter((mark) => mark.statement === "mine").map((mark) => mark.transactionId),
+      ...nobodyCandidates.map((sale) => sale.transactionId),
+    ],
+    exceptHandinId: handin?.id ?? null,
+  });
+  for (const [transactionId, held] of counted) {
+    const known = reported.get(transactionId);
+    if (known === undefined || known.handinId === handin?.id) reported.set(transactionId, held);
   }
   // The sales the person's words here say «не моё» of: each stays their own line (shift-handin-rules.ts).
   const notMine = new Set(marks.filter((mark) => mark.statement === "not_mine").map((mark) => mark.transactionId));

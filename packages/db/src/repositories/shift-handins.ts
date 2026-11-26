@@ -629,6 +629,33 @@ export async function listReportedSales(
   return out;
 }
 
+/**
+ * Of the sales named, the ones the newest version of a submitted report of the person's logins counts (more than 0),
+ * whatever its report date, by transaction id — which report; the report `exceptHandinId` aside. As `listReportedSales`
+ * with no date bound, for the few sales a person's word may count anew.
+ */
+export async function listCountedSalesOfUsers(
+  db: Database,
+  input: { userIds: readonly number[]; transactionIds: readonly number[]; exceptHandinId: number | null },
+): Promise<Map<number, { handinId: number; shiftId: number; reportDate: string }>> {
+  if (input.userIds.length === 0 || input.transactionIds.length === 0) return new Map();
+  const except = input.exceptHandinId === null ? sql`` : sql`and h.id <> ${input.exceptHandinId}`;
+  const result = await db.execute<Row>(sql`
+    select (line ->> 'transactionId')::bigint as transaction_id, h.id as handin_id, h.shift_id, to_char(h.report_date, 'YYYY-MM-DD') as report_date
+    from shift_handins h
+    join shift_handin_versions v on v.handin_id = h.id and v.version = h.current_version
+    cross join lateral jsonb_array_elements(v.lines) as line
+    where h.user_id = any(${ids(input.userIds)}) and h.state = 'submitted' ${except}
+      and (line ->> 'transactionId')::bigint = any(${ids([...new Set(input.transactionIds)])})
+      and line ->> 'alreadyIn' is null and coalesce((line ->> 'amountMills')::bigint, 0) > 0
+    order by h.submitted_at`);
+  const out = new Map<number, { handinId: number; shiftId: number; reportDate: string }>();
+  for (const row of result.rows) {
+    out.set(num(row.transaction_id), { handinId: num(row.handin_id), shiftId: num(row.shift_id), reportDate: String(row.report_date) });
+  }
+  return out;
+}
+
 /** The ledger's feed: versions made after the cursor (`afterId`), oldest first, settled for `settleSeconds` at least. */
 /**
  * The ledger's feed order (0405, review R2-b): every version committed and not placed yet gets its place, after every
@@ -1154,7 +1181,10 @@ export async function listHandinSalesOnPages(
 /**
  * Exact-match lookup for «Добавить продажу»: searches active sales strictly within the caller's granted pages and
  * realm, by platform/Hub transaction reference OR by (fan + amountMills). Returns up to `limit` (default 2) rows so
- * the caller distinguishes exact-1 from 0/>1 without ever exposing a candidate list.
+ * the caller distinguishes exact-1 from 0/>1 without ever exposing a candidate list. A sale the newest version of
+ * another handed-in report of the caller's logins (`ownReports`) already counts is not matched, however old that
+ * report: a nobody's sale stays nobody's after a «моё», and one person is never paid for it twice. Another person's
+ * report holding it does not hide it (that is a take, settled with the colleague).
  */
 export async function findSalesForReportClaim(
   db: Database,
@@ -1164,6 +1194,8 @@ export async function findSalesForReportClaim(
     transactionRef?: string | undefined;
     fan?: string | undefined;
     amountMills?: number | undefined;
+    /** The caller's logins and the shift the sale is added to (its own report does not hide it). */
+    ownReports: { userIds: readonly number[]; exceptShiftId: number };
     limit?: number;
   },
 ): Promise<HandinSaleRow[]> {
@@ -1203,6 +1235,13 @@ export async function findSalesForReportClaim(
       and h.home = 'nobody'
       and not exists (select 1 from sale_owner_decisions d where d.transaction_id = t.id and d.state = 'active')
       and not exists (select 1 from sale_claims c where c.transaction_id = t.id and c.state = 'agreed')
+      and not exists (
+        select 1 from shift_handins rh
+        join shift_handin_versions rv on rv.handin_id = rh.id and rv.version = rh.current_version
+        cross join lateral jsonb_array_elements(rv.lines) as rl
+        where rh.user_id = any(${ids(input.ownReports.userIds)}) and rh.state = 'submitted' and rh.shift_id <> ${input.ownReports.exceptShiftId}
+          and (rl ->> 'transactionId')::bigint = t.id and rl ->> 'alreadyIn' is null
+          and coalesce((rl ->> 'amountMills')::bigint, 0) > 0)
       and ${matchSql}
     order by t.occurred_at desc, t.id desc
     limit ${input.limit ?? 2}`);
@@ -1278,13 +1317,13 @@ export async function listRecipientOpenShifts(
 /**
  * «Продажи → Список продаж»: which of a team's sales a list shows, by their home as `sale_homes` keeps it (the wire's
  * names are the contract's, routes-sale-chain.ts). `mine` — a share is one of `userIds`'; `people` — a shift's or a
- * look-in's; `owner` — the owner decides; `pot`, `waiting`, `nobody` — the home of that name; `none` — no home yet, or
- * a sale before the rule.
+ * look-in's; `owner` — the owner decides; `pot`, `waiting` — the home of that name; `nobody` — a nobody's sale no
+ * handed-in report counts; `none` — no home yet, or a sale before the rule.
  */
 export const TEAM_SALE_HOME_FILTERS = ["all", "mine", "people", "owner", "pot", "waiting", "nobody", "none"] as const;
 export type TeamSaleHomeFilter = (typeof TEAM_SALE_HOME_FILTERS)[number];
 
-function teamSaleHomeSql(filter: Exclude<TeamSaleHomeFilter, "all">, userIds: readonly number[]) {
+function teamSaleHomeSql(filter: Exclude<TeamSaleHomeFilter, "all">, userIds: readonly number[], from: Date) {
   switch (filter) {
     case "mine":
       return sql`exists (select 1 from jsonb_array_elements(h.shares) as share where (share ->> 'userId')::bigint = any(${ids(userIds)}))`;
@@ -1294,6 +1333,18 @@ function teamSaleHomeSql(filter: Exclude<TeamSaleHomeFilter, "all">, userIds: re
       return sql`h.home = 'decide'`;
     case "none":
       return sql`(h.home is null or h.home in ('before_rule', 'unknown'))`;
+    case "nobody":
+      // A nobody's sale a handed-in report counts by the person's word stays nobody's by the rule, but it is no open
+      // nobody's sale: out, as the owner's «Отдать» list leaves it out. A version holding a sale of the window was
+      // handed in after the sale, so the versions before `from` are not read.
+      return sql`(h.home = 'nobody' and t.id not in (
+        select (rl ->> 'transactionId')::bigint
+        from shift_handins rh
+        join shift_handin_versions rv on rv.handin_id = rh.id and rv.version = rh.current_version
+        cross join lateral jsonb_array_elements(rv.lines) as rl
+        where rh.state = 'submitted' and rv.submitted_at >= ${from.toISOString()}::timestamptz
+          and rl ->> 'transactionId' is not null and rl ->> 'alreadyIn' is null
+          and coalesce((rl ->> 'amountMills')::bigint, 0) > 0))`;
     default:
       return sql`h.home = ${filter}`;
   }
@@ -1315,20 +1366,20 @@ export async function listTeamSalesWithHomes(
       and t.canonical_type in ('subscription', 'tip', 'message_purchase', 'post_purchase', 'stream_tip')
       and t.occurred_at >= ${input.from.toISOString()}::timestamptz and t.occurred_at < ${input.to.toISOString()}::timestamptz
       ${visibleHome}`;
-  const only = input.filter === "all" ? sql`` : sql`and ${teamSaleHomeSql(input.filter, input.userIds)}`;
+  const only = input.filter === "all" ? sql`` : sql`and ${teamSaleHomeSql(input.filter, input.userIds, input.from)}`;
   const result = await db.execute<Row>(sql`${SALE_SELECT}
     ${where} ${only}
     order by t.occurred_at desc, t.id desc
     limit ${input.limit} offset ${input.offset}`);
   const counted = await db.execute<Row>(sql`
     select count(*) as all_count,
-      count(*) filter (where ${teamSaleHomeSql("mine", input.userIds)}) as mine,
-      count(*) filter (where ${teamSaleHomeSql("people", input.userIds)}) as people,
-      count(*) filter (where ${teamSaleHomeSql("owner", input.userIds)}) as owner,
-      count(*) filter (where ${teamSaleHomeSql("pot", input.userIds)}) as pot,
-      count(*) filter (where ${teamSaleHomeSql("waiting", input.userIds)}) as waiting,
-      count(*) filter (where ${teamSaleHomeSql("nobody", input.userIds)}) as nobody,
-      count(*) filter (where ${teamSaleHomeSql("none", input.userIds)}) as none
+      count(*) filter (where ${teamSaleHomeSql("mine", input.userIds, input.from)}) as mine,
+      count(*) filter (where ${teamSaleHomeSql("people", input.userIds, input.from)}) as people,
+      count(*) filter (where ${teamSaleHomeSql("owner", input.userIds, input.from)}) as owner,
+      count(*) filter (where ${teamSaleHomeSql("pot", input.userIds, input.from)}) as pot,
+      count(*) filter (where ${teamSaleHomeSql("waiting", input.userIds, input.from)}) as waiting,
+      count(*) filter (where ${teamSaleHomeSql("nobody", input.userIds, input.from)}) as nobody,
+      count(*) filter (where ${teamSaleHomeSql("none", input.userIds, input.from)}) as none
     from transactions t
     left join sale_homes h on h.transaction_id = t.id
     ${where}`);

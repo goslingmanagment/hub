@@ -65,6 +65,7 @@ export const saleChainResponseSchema = z.object({
   /**
    * The people the home gives a share, each with the rest of the chain: their shift, their report of that day, the
    * ledger's accrual and payout of that day. A chatter sees only their own; empty — nobody's sale, a pot's, waiting.
+   * A nobody's sale a handed-in report counts by the person's word shows that report's person, the line's amount.
    */
   people: z.array(z.object({
     userId: intId,
