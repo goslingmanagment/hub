@@ -173,6 +173,20 @@ export function useBoard({ report, host, transport, light }: {
     setLit(rows.map((row) => row.key));
     pendingReveal.current = rows[0]!.key;
   }, [board]);
+  /**
+   * A row a write is adding (a sale from «Найти продажу»): shown when Hub's board has it. The press's own `show` is
+   * bound to the board before the write, where the row is not yet.
+   */
+  const pendingShow = useRef<string | null>(null);
+  const showLater = useCallback((key: string) => {
+    pendingShow.current = key;
+  }, []);
+  useEffect(() => {
+    const key = pendingShow.current;
+    if (key === null || rowByKey(board, key) === null) return;
+    pendingShow.current = null;
+    show(key);
+  }, [board, show]);
   // A link to a row (`?sale=`, a matter's link): opens its folded group if it is there, lights and scrolls to it.
   useEffect(() => {
     if (light) show(keyOfTransaction(light));
@@ -436,7 +450,7 @@ export function useBoard({ report, host, transport, light }: {
     board, report, host, own, preview, editing, pending: write.isPending, seenMills, mainRef,
     menu, menuRow, setMenu, panel, setPanel, ask, setAsk, edit, noteDraft, cancelNote, refuse, setRefuse, beforeOpen, setBeforeOpen,
     lit, selected, setSelected, miss,
-    toastText, toast, run, show, showMany, reveal,
+    toastText, toast, run, show, showLater, showMany, reveal,
     commitNote, openNote, unask, apply, tick, sendAsk, answer, sendRefuse, find, collapse, submit, confirm, reopen, openFind, copyPost, addSighting, resend,
     memoFlushes, saveComment, flushMemos,
   };

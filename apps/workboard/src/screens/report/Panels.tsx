@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useDismiss, useFocusScope } from "@agency_hub_core/ui";
 import { millsFromDollars } from "@agency_hub_core/shared";
+import type { ShiftReportReportSaleResponse } from "@agency_hub_core/contracts";
 import { useClaimable } from "./data";
 import { useFloating } from "./floating";
 import { allRows, clock, day, fanOf, keyOfTransaction, usd } from "./model";
@@ -172,7 +173,8 @@ function FindSale({ api, close }: { api: BoardApi; close: () => void }) {
     if (await api.run({ op: "line", transactionId, body: { statement: "mine", note } }, "Продажа добавлена в отчёт")) {
       setClaiming(null);
       close();
-      api.show(keyOfTransaction(transactionId));
+      // The row is on Hub's board after the write, not on this render's.
+      api.showLater(keyOfTransaction(transactionId));
     }
   });
   const dollars = Number(reportAmount.replace(",", "."));
@@ -184,7 +186,13 @@ function FindSale({ api, close }: { api: BoardApi; close: () => void }) {
     const body = hasRef
       ? { transactionRef: reportRef.trim(), note: reportNote.trim() }
       : { fan: reportFan.trim(), amountMills: Number(millsFromDollars(dollars)), note: reportNote.trim() };
-    if (await api.run({ op: "reportSale", body }, "Продажа добавлена в отчёт")) {
+    const added = (answer: unknown) => {
+      // Hub names the sale it found: its row lights once the board read again has it.
+      const transactionId = (answer as Partial<ShiftReportReportSaleResponse> | null)?.transactionId;
+      if (typeof transactionId === "number") api.showLater(keyOfTransaction(transactionId));
+      return "Продажа добавлена в отчёт";
+    };
+    if (await api.run({ op: "reportSale", body }, added)) {
       setReportRef("");
       setReportFan("");
       setReportAmount("");

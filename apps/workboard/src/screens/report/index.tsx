@@ -48,7 +48,10 @@ function ShiftBoard({ shiftId, host, light, transport, seed }: {
     if (transport && report && report.board === null) transport.post(frameState(shiftId, null));
   }, [transport, report, shiftId]);
   if (read.isPending) return <Gate waiting>Открываем отчёт…</Gate>;
-  if (read.isError || !report) return <Failed error={read.error} host={host} retry={() => void read.refetch()} />;
+  // A poll that failed (a deploy's 502 for a few seconds) keeps the board and what is typed on it: it reads again by
+  // itself. Only no board at all, or Hub refusing the read (signed out, not this person's shift), takes it away.
+  const status = read.isError ? hubErrorStatus(read.error) : null;
+  if (!report || status === 401 || status === 403 || status === 404) return <Failed error={read.error} host={host} retry={() => void read.refetch()} />;
   if (report.board === null) {
     return <Gate><b>У этой смены нет доски</b>Отчёт этой смены сдаётся постом в «Отчётность», как раньше.</Gate>;
   }

@@ -212,7 +212,8 @@ export function CustomsFactsScreen({ frame }: { frame?: CustomsFrame } = {}) {
   let body: ReactNode;
   if (board.isPending) {
     body = <Skeleton height={480} />;
-  } else if (board.isError || !data) {
+  } else if (!data) {
+    // A read again that failed keeps the orders on the screen: the header says «Не обновилось» (`stale`).
     body = <ErrorState onRetry={() => void board.refetch()} retrying={board.isFetching}>{readFailure(board.error)}</ErrorState>;
   } else {
     const card = param("card");
