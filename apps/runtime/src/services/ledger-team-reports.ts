@@ -51,6 +51,8 @@ const ledgerPostsSchema = z.object({
     pages_micros: micros,
     flags: z.array(z.string()).nullish().transform((value): string[] => value ?? []),
     current: z.boolean().optional(),
+    // false — the post's day accrues from the sheets or from Hub's report, not from the post (an older ledger: absent).
+    accrues: z.boolean().optional(),
     pages: list(z.object({
       name: text,
       page_label: nullable(z.string()),
@@ -207,6 +209,7 @@ export async function readTeamLedgerReportsWithBreakdowns(
     pagesMills: millsOf(post.pages_micros),
     flags: post.flags,
     blocking: post.flags.some((flag) => BLOCKING_POST_FLAGS.has(flag)),
+    accrues: post.accrues,
     pages: post.pages.map((page) => ({ name: page.name, pageLabel: page.page_label ?? page.page, inShift: page.in_shift, amountMills: millsOf(page.amount_micros) })),
     link: telegramPostLink(post.peer, post.topic, post.msg_id),
   })).sort((left, right) => right.postedAt.localeCompare(left.postedAt) || right.id - left.id);

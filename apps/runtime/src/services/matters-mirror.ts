@@ -268,15 +268,16 @@ function moscowDay(iso: string): string | null {
  * reports (`reportsFrom` of its payouts) and only of the days it accrues: its
  * report date on or after `reportsFrom`, or — the date not read — posted
  * (Moscow) on or after it. Before that the payout sheets pay for the day, and
- * the post is information for «Выплаты → Отчёты», not a question. The post's
- * pages are its account lines.
+ * the post is information for «Выплаты → Отчёты», not a question. So is a post
+ * the ledger says accrues nothing (`accrues` false: a day Hub's handed-in report
+ * accrues). The post's pages are its account lines.
  */
 export function reportPostItems(reports: Pick<TeamLedgerReportsResponse, "posts">, payouts: Pick<TeamLedgerPayoutsResponse, "reportsFrom">): MirrorItem[] {
   const from = payouts.reportsFrom;
   if (!from) return [];
   return reports.posts
     .filter((post) => {
-      if (!post.blocking) return false;
+      if (!post.blocking || post.accrues === false) return false;
       const day = post.reportDate ?? moscowDay(post.postedAt);
       return day !== null && day >= from;
     })
@@ -307,7 +308,9 @@ const POST_FIX_WORDS: Readonly<Record<(typeof REPORT_POST_FIXABLE_FLAGS)[number]
  * one matter per post for the author's living chatter login (`loginOf`: the ledger's code is the registry's), never
  * money — no sum in the title or the evidence. A post of nobody's chatter login opens nothing. The link is where the
  * author sees the post's numbers against Hub's: that day's report, open in its row of «Мои смены», the week of the
- * day (`?report=`); the owner's line of it opens «Выплаты → Отчёты» (Workboard's list makes that address).
+ * day (`?report=`); the owner's line of it opens «Выплаты → Отчёты» (Workboard's list makes that address). A post
+ * the ledger says accrues nothing (`accrues` false: a day Hub's handed-in report accrues) opens nothing either: fixing
+ * it changes no pay.
  */
 export function reportPostFixItems(
   reports: Pick<TeamLedgerReportsResponse, "posts">,
@@ -318,6 +321,7 @@ export function reportPostFixItems(
   if (!from) return [];
   const items: MirrorItem[] = [];
   for (const post of reports.posts) {
+    if (post.accrues === false) continue;
     const flags = REPORT_POST_FIXABLE_FLAGS.filter((flag) => post.flags.includes(flag));
     // Two reports pasted into one message (the ledger's `second_report`): the first counts, the second is read by
     // nobody until its author sends it as its own message. Not a flag that keeps the post out of the pay, so its own words.

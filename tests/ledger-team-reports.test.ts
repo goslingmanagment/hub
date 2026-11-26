@@ -132,7 +132,7 @@ describe("readTeamLedgerReports", () => {
       fetchImpl: ledger({
         reports: { status: 200, body: { ...query, reports: [draft({ id: 30, person: null, hub_user_id: null, hub_username: "kate.v", pages: [{ page: "page-c", amount_micros: 5_000_000 }] })] } },
         days: { status: 200, body: { ...query, days: null } },
-        posts: { status: 200, body: { ...query, posts: [post({ id: 303, person: null, report_date: null, flags: ["unknown_author"], sender: "alex.k" })] } },
+        posts: { status: 200, body: { ...query, posts: [post({ id: 303, person: null, report_date: null, flags: ["unknown_author"], sender: "alex.k", accrues: true })] } },
       }),
       now,
     });
@@ -141,8 +141,8 @@ describe("readTeamLedgerReports", () => {
       person: { slug: null, hubUser: { userId: 5, username: "kate.v" } },
       pages: [{ pageLabel: "page-c", postedMills: null, draftMills: 5_000, state: "draft_only" }],
     }]);
-    // The sender's name is shown, never matched to a login.
-    expect(result.posts[0]).toMatchObject({ person: { slug: null, hubUser: null, name: "alex.k" }, reportDate: null, blocking: true });
+    // The sender's name is shown, never matched to a login; the ledger's word on whether the post accrues passes through.
+    expect(result.posts[0]).toMatchObject({ person: { slug: null, hubUser: null, name: "alex.k" }, reportDate: null, blocking: true, accrues: true });
   });
 
   it("answers «none read» while the ledger refuses Hub the posts, said once in the log", async () => {

@@ -316,6 +316,12 @@ export const teamLedgerReportPostSchema = z.object({
   flags: z.array(z.string()),
   /** A flag keeps the whole post out of the pay base: unknown_author, no_date, sum_mismatch, date_mismatch. */
   blocking: z.boolean(),
+  /**
+   * The post's day accrues from the post (the ledger's `accrues`); false — a day the payout sheets paid for or one
+   * Hub's handed-in report accrues, so the post moves no pay and its flags are information. Absent — an older ledger
+   * did not say.
+   */
+  accrues: z.boolean().optional(),
   pages: z.array(z.object({ name: z.string(), pageLabel: z.string().nullable(), inShift: z.boolean(), amountMills: mills })),
   /** The post in Telegram; null — the chat's id does not make a link. */
   link: z.string().nullable(),

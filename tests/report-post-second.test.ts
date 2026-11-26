@@ -45,6 +45,12 @@ describe("a message with two reports", () => {
     expect(reportPostFixItems(reports([post(805, ["second_report"]), earlier, other]), payouts, loginOf).map((one) => one.key)).toEqual(["report.post_fix:805"]);
   });
 
+  it("opens nothing on a day Hub's handed-in report accrues (the ledger's accrues false): the post moves no pay", () => {
+    const board = (id: number, flags: string[]) => ({ ...post(id, flags), accrues: false });
+    expect(reportPostFixItems(reports([board(809, ["date_mismatch"]), board(810, ["second_report"])]), payouts, loginOf)).toEqual([]);
+    expect(reportPostFixItems(reports([{ ...post(811, ["date_mismatch"]), accrues: true }]), payouts, loginOf).map((one) => one.key)).toEqual(["report.post_fix:811"]);
+  });
+
   it("waits, like every post's matter, for the day the reports accrue from", () => {
     expect(reportPostFixItems(reports([post(804, ["second_report"])]), { reportsFrom: null } as unknown as Payouts, loginOf)).toEqual([]);
   });
