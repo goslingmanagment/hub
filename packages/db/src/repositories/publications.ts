@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import {
   PUBLICATION_ACTIVE_STATUSES,
@@ -860,15 +860,17 @@ const TITLE_EDGES = " \t\n\r\u00a0";
 export async function findPageVaultAlbumRefs(db: Database, pageId: number, title: string): Promise<string[]> {
   const result = await db.execute<Row>(sql`
     select a.album_ref from creator_vault_albums a
+      left join lateral (${albumEditSince(sql`a.page_id`, sql`a.album_ref`, sql`a.last_observed_at`)}) e on true
      where a.page_id = ${pageId} and a.vault_kind = 'creator' and a.album_type is null
-       and a.missing_since is null and btrim(a.title, ${TITLE_EDGES}) = ${title}
+       and a.missing_since is null and btrim(coalesce(e.album_title, a.title), ${TITLE_EDGES}) = ${title}
     union
     select l.list_ref from onlyfans_vault_lists l
       join pages pg on pg.id = l.page_id and pg.platform::text = 'onlyfans'
      where l.page_id = ${pageId} and l.list_type = 'custom' and l.missing_since is null and btrim(l.name, ${TITLE_EDGES}) = ${title}
     union
     select p.vault_album_ref from publications p
-     where p.page_id = ${pageId} and p.kind = 'vault_album' and p.vault_album_ref is not null and p.text = ${title}
+      left join lateral (${albumEditSince(sql`p.page_id`, sql`p.vault_album_ref`, sql`'-infinity'::timestamptz`)}) e on true
+     where p.page_id = ${pageId} and p.kind = 'vault_album' and p.vault_album_ref is not null and coalesce(e.album_title, p.text) = ${title}
        -- Once collected, the listing's row speaks for it (its title now, or gone).
        and not exists (select 1 from creator_vault_albums seen
                         where seen.page_id = p.page_id and seen.vault_kind = 'creator' and seen.album_ref = p.vault_album_ref)
@@ -876,6 +878,62 @@ export async function findPageVaultAlbumRefs(db: Database, pageId: number, title
                         where seen.page_id = p.page_id and seen.list_ref = p.vault_album_ref)
   `);
   return result.rows.map((row) => String(row.album_ref)).sort();
+}
+
+/**
+ * An album's newest new title Fansly confirmed after `since` (0451, an
+ * agent's `album_edit`): the title Hub holds for it until a listing of the
+ * page's albums taken after it speaks (`since`: that listing's time).
+ */
+function albumEditSince(pageId: SQL, albumRef: SQL, since: SQL): SQL {
+  return sql`
+    select c.album_title, c.album_description from fansly_write_commands c
+     where c.page_id = ${pageId} and c.step = 'album_edit' and c.album_ref = ${albumRef}
+       and c.state = 'answered' and c.settled_at > ${since}
+     order by c.id desc limit 1`;
+}
+
+/** A Fansly page's own vault album as Hub knows it now (0451). */
+export interface PageFanslyVaultAlbum {
+  albumRef: string;
+  /** Its title: the listing's, or the newer one an agent's rename got Fansly's answer for. */
+  title: string | null;
+  description: string | null;
+  /** When Hub last listed it; null: an album a vault-album publication made that no listing has collected yet. */
+  lastObservedAt: Date | null;
+}
+
+/**
+ * A Fansly page's own vault albums (not Fansly's All / Posts / Messages, not
+ * gone from the last full listing), by the same sources as
+ * `findPageVaultAlbumRefs`: the listing's albums with the title an agent's
+ * rename since gave them, and the albums Hub's publications made that no
+ * listing has collected yet (an empty description, as Hub makes them).
+ */
+export async function listPageFanslyVaultAlbums(db: Database, pageId: number): Promise<PageFanslyVaultAlbum[]> {
+  const result = await db.execute<Row>(sql`
+    select a.album_ref, coalesce(e.album_title, a.title) as title,
+           case when e.album_title is null then a.description else e.album_description end as description,
+           a.last_observed_at
+      from creator_vault_albums a
+      join pages pg on pg.id = a.page_id and pg.platform::text = 'fansly'
+      left join lateral (${albumEditSince(sql`a.page_id`, sql`a.album_ref`, sql`a.last_observed_at`)}) e on true
+     where a.page_id = ${pageId} and a.vault_kind = 'creator' and a.album_type is null and a.missing_since is null
+    union all
+    select distinct on (p.vault_album_ref) p.vault_album_ref, coalesce(e.album_title, p.text), coalesce(e.album_description, ''), null
+      from publications p
+      join pages pg on pg.id = p.page_id and pg.platform::text = 'fansly'
+      left join lateral (${albumEditSince(sql`p.page_id`, sql`p.vault_album_ref`, sql`'-infinity'::timestamptz`)}) e on true
+     where p.page_id = ${pageId} and p.kind = 'vault_album' and p.vault_album_ref is not null
+       and not exists (select 1 from creator_vault_albums seen
+                        where seen.page_id = p.page_id and seen.vault_kind = 'creator' and seen.album_ref = p.vault_album_ref)
+  `);
+  return result.rows.map((row) => ({
+    albumRef: String(row.album_ref),
+    title: typeof row.title === "string" ? row.title : null,
+    description: typeof row.description === "string" ? row.description : null,
+    lastObservedAt: nullableDate(row.last_observed_at),
+  })).sort((a, b) => a.albumRef.localeCompare(b.albumRef));
 }
 
 /**

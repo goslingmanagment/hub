@@ -772,6 +772,9 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       from.push(before.id);
       return { spec: "vault.media", params: { albumId, before: cursor }, from };
     }
+    case "album_edit":
+      // An agent's new title of an album (0451): never a step of a publication.
+      refuse("step_without_publication");
   }
 }
 
@@ -884,4 +887,38 @@ export function deriveFanslyPostCommand(input: {
     fingerprint: write.fingerprint,
   };
   return { ok: true, request: { spec: built.spec, params: built.params, step: facts }, write, facts };
+}
+
+/**
+ * The request of an agent's new title of a page's vault album (0451): no
+ * publication, no approval — the album, the title and the description as the
+ * command's row names them (the description as Hub knew it when it was asked:
+ * Fansly clears one the request leaves out).
+ */
+export function deriveFanslyAlbumEditCommand(input: {
+  command: Pick<FanslyWriteCommandRecord, "id" | "step" | "item" | "albumEdit">;
+}): WriteDerivation {
+  const { command } = input;
+  if (command.step !== "album_edit") return { ok: false, reason: "step_needs_publication" };
+  if (command.item !== "") return { ok: false, reason: "item_not_of_step" };
+  const edit = command.albumEdit ?? null;
+  if (edit === null) return { ok: false, reason: "no_album" };
+  const params = { albumId: edit.albumRef, title: edit.title, description: edit.description };
+  let write: ReturnType<typeof describeFanslyCommandRequest>;
+  try {
+    write = describeFanslyCommandRequest("publish.vault_album_edit", params);
+  } catch (error) {
+    // A parameter no request may carry: never sent.
+    return { ok: false, reason: `body_invalid:${error instanceof Error ? error.message : String(error)}`.slice(0, 200) };
+  }
+  const facts: WriteDerivedFacts = {
+    commandId: command.id,
+    dispatchId: null,
+    revisionId: null,
+    step: command.step,
+    item: command.item,
+    from: [],
+    fingerprint: write.fingerprint,
+  };
+  return { ok: true, request: { spec: "publish.vault_album_edit", params, step: facts }, write, facts };
 }

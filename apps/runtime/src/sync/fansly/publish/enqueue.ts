@@ -2,11 +2,13 @@ import {
   getFanslyWriteDispatch,
   getPagePublishingSettings,
   getSyncPageTransport,
+  insertFanslyAlbumEditCommand,
   insertFanslyPostCommand,
   insertFanslyWriteCommand,
   setFanslyWriteCommandWork,
   upsertDemand,
   type Database,
+  type FanslyAlbumEdit,
   type FanslyPostStep,
   type FanslyWriteCommandRecord,
   type FanslyWritePriority,
@@ -155,6 +157,40 @@ export async function enqueueFanslyPostCommand(db: Database, input: EnqueueFansl
       dueAt: input.notBefore,
       deadlineAt: null,
       demand: { reasons: [`post:${input.postRef}:${input.step}`] },
+      createOnly: true,
+    });
+    await setFanslyWriteCommandWork(tx, { id: command.id, workId: work.id });
+    return { ...command, workId: work.id };
+  });
+}
+
+export interface EnqueueFanslyAlbumEditInput extends Pick<EnqueueFanslyWriteInput, "notBefore" | "notAfter" | "config" | "now" | "isSendable"> {
+  pageId: number;
+  edit: FanslyAlbumEdit;
+}
+
+/**
+ * Queue an agent's new title of a page's vault album (0451) and its work row,
+ * in one transaction, under a create's switches (publishing on, the page's
+ * too, not stopped). Null: one is queued or sending for that album already.
+ */
+export async function enqueueFanslyAlbumEditCommand(db: Database, input: EnqueueFanslyAlbumEditInput): Promise<FanslyWriteCommandRecord | null> {
+  await guardEnqueue(db, input.pageId, { ...input, step: "album_edit" });
+  return db.transaction(async (raw) => {
+    const tx = raw as unknown as Database;
+    const command = await insertFanslyAlbumEditCommand(tx, {
+      pageId: input.pageId, edit: input.edit, notBefore: input.notBefore, notAfter: input.notAfter,
+    });
+    if (command === null) return null;
+    const work = await upsertDemand(tx, {
+      pageId: command.pageId,
+      resource: fanslyWriteResource("background", "album_edit"),
+      subject: String(command.id),
+      kind: "goal",
+      class: "planned",
+      dueAt: input.notBefore,
+      deadlineAt: null,
+      demand: { reasons: [`album:${input.edit.albumRef}:album_edit`] },
       createOnly: true,
     });
     await setFanslyWriteCommandWork(tx, { id: command.id, workId: work.id });

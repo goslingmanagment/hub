@@ -32,6 +32,8 @@ export const FANSLY_WRITE_STEPS = [
   // 0352: one page of the album read back once its media are added (a GET,
   // the catalog's own `vault.media`).
   "album_read",
+  // 0451: a vault album's own title changed by an agent, with no publication.
+  "album_edit",
 ] as const;
 export type FanslyWriteStep = (typeof FANSLY_WRITE_STEPS)[number];
 
@@ -83,6 +85,16 @@ export interface FanslyWriteCommandRecord {
   /** The post a cancel or a delete takes (0369): every one queued since names
    *  it, a publication's too. Null for every other step and older rows. */
   postRef: string | null;
+  /** An album's new title (0451): the album, the title and the description
+   *  as Hub knew it when it was asked. Null for every other step. */
+  albumEdit?: FanslyAlbumEdit | null;
+}
+
+/** What an `album_edit` command changes (0451). */
+export interface FanslyAlbumEdit {
+  albumRef: string;
+  title: string;
+  description: string;
 }
 
 type Row = Record<string, unknown>;
@@ -134,6 +146,9 @@ function toCommand(row: Row): FanslyWriteCommandRecord {
     admittedAt: nullableDate(row.admitted_at),
     settledAt: nullableDate(row.settled_at),
     postRef: (row.post_ref as string | null | undefined) ?? null,
+    albumEdit: typeof row.album_ref === "string"
+      ? { albumRef: row.album_ref, title: String(row.album_title ?? ""), description: String(row.album_description ?? "") }
+      : null,
   };
 }
 
@@ -214,8 +229,46 @@ export async function findFanslyPostCommand(
 export async function listFanslyPostCommandsSettledSince(db: Database, since: Date): Promise<FanslyWriteCommandRecord[]> {
   const result = await db.execute<Row>(sql`
     select * from fansly_write_commands
-     where publication_id is null and state in ('answered', 'unknown') and settled_at >= ${since}
+     where publication_id is null and post_ref is not null and state in ('answered', 'unknown') and settled_at >= ${since}
      order by id
+  `);
+  return result.rows.map(toCommand);
+}
+
+/**
+ * Queue an agent's new title of a page's vault album (0451): no publication,
+ * the album, the title and the description named on the row. Null when one is
+ * queued or sending for that album already: never two at once.
+ */
+export async function insertFanslyAlbumEditCommand(db: Database, input: {
+  pageId: number;
+  edit: FanslyAlbumEdit;
+  notBefore: Date;
+  notAfter: Date | null;
+}): Promise<FanslyWriteCommandRecord | null> {
+  const inserted = await db.execute<Row>(sql`
+    insert into fansly_write_commands (page_id, dispatch_id, publication_id, step, item, priority, not_before, not_after,
+                                       album_ref, album_title, album_description)
+    values (${input.pageId}, null, null, 'album_edit', '', 'background', ${input.notBefore}, ${input.notAfter},
+            ${input.edit.albumRef}, ${input.edit.title}, ${input.edit.description})
+    on conflict do nothing
+    returning *
+  `);
+  const row = inserted.rows[0];
+  return row ? toCommand(row) : null;
+}
+
+/** A page's `album_edit` commands, newest first: of one album, or of all its albums. */
+export async function listFanslyAlbumEditCommands(
+  db: Database,
+  input: { pageId: number; albumRef?: string; limit?: number },
+): Promise<FanslyWriteCommandRecord[]> {
+  const result = await db.execute<Row>(sql`
+    select * from fansly_write_commands
+     where page_id = ${input.pageId} and step = 'album_edit'
+       ${input.albumRef === undefined ? sql`` : sql`and album_ref = ${input.albumRef}`}
+     order by id desc
+     limit ${input.limit ?? 50}
   `);
   return result.rows.map(toCommand);
 }

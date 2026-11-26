@@ -67,7 +67,7 @@ describe("the route catalogue", () => {
     expect(writes.map((route) => `${route.host} ${route.template}`).sort()).toEqual([
       "api /account/media", "api /account/media/bundle", "api /lists", "api /lists/items/add", "api /lists/items/remove",
       "api /mediastories", "api /post", "api /post/:postId/delete", "api /post/scheduled/:postId/cancel",
-      "api /vault/albums", "api /vault/albums/media", "api /vault/albums/media/rename", "upload /media/upload/complete", "upload /media/upload/create",
+      "api /vault/albums", "api /vault/albums/edit", "api /vault/albums/media", "api /vault/albums/media/rename", "upload /media/upload/complete", "upload /media/upload/create",
     ]);
     // A site read of a legacy-only endpoint is journaled on its route
     // (Project Browser, 0271): its clock counts there, not against every route.

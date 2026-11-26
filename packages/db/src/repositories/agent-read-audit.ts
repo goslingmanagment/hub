@@ -159,6 +159,10 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
   questionId: "count",
   /** Gengar's check of a handed-in report (review:shift_reports, package R): which candidate; the answer in `outcome`. */
   candidateId: "count",
+  /** A Fansly vault album renamed by an agent (0451): the album (Fansly's id), the write command that carries it;
+   *  the new title enters as `textSha256`/`textLength`, its words go to the owner's audit only. */
+  albumRef: "identifier",
+  commandId: "count",
 } as const satisfies Record<string, AgentReadAuditSummaryShape>;
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;

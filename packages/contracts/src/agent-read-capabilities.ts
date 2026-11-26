@@ -39,6 +39,8 @@ export const AGENT_CAPABILITIES = [
    * Approving vault albums and nothing else, on the word of the person who asked
    * (owner 2026-11-04). Fans do not see an album, so a content manager's own agent
    * holds this instead of approve:publications, which also reaches paid posts.
+   * With write:publication_drafts (as approve:publications) it also renames a
+   * Fansly vault album of the key's pages (0451): no approval of its own.
    */
   "approve:vault_albums",
   /**

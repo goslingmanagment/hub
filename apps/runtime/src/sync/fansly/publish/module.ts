@@ -47,6 +47,7 @@ import type {
 import { journalWriteAnswer, readWriteAnswer } from "./answers.ts";
 import { FANSLY_WITHDRAW_STEP_STATUS, FANSLY_WITHDRAW_STEPS, FANSLY_WRITE_STEP_ROUTES, fanslyStepSendable, nextWriteStep, writeAnswerVerdict, writeOutcomeDecision } from "./commands.ts";
 import {
+  deriveFanslyAlbumEditCommand,
   deriveFanslyPostCommand,
   deriveFanslyWrite,
   describeFanslyCommandRequest,
@@ -92,11 +93,19 @@ import { writeGuard } from "./guard.ts";
 //   changed on disk or whose sealed URL does not open, a page no longer
 //   active) refuses the command, still queued, with that reason.
 // - a post with no Hub publication (owner 2026-11-11, 0369): only a cancel or
-//   a delete, of the command's own `postRef`. The same guard, the same one
-//   attempt and fingerprint; there is no approval to derive from or lock, so
-//   the plan derives from the post itself (a cancel, from a read of the
-//   schedule taken after it was queued) and the admission and the
-//   confirmation check the page is not stopped.
+//   a delete, of the command's own `postRef`; and an agent's new title of a
+//   vault album (0451), as its row names it, under a create's switches. The
+//   same guard, the same one attempt and fingerprint; there is no approval
+//   to derive from or lock, so the plan derives from the post itself (a
+//   cancel, from a read of the schedule taken after it was queued) and the
+//   admission and the confirmation check the page is not stopped.
+
+/** A command with no publication that may go (0369, 0451): a cancel or a
+ *  delete of its own post, or an album's new title its row names. */
+function publicationLess(command: Pick<FanslyWriteCommandRecord, "step" | "postRef" | "albumEdit">): boolean {
+  if (command.step === "album_edit") return command.albumEdit != null;
+  return FANSLY_WITHDRAW_STEPS.includes(command.step) && command.postRef !== null;
+}
 
 /** A work's subject is its command's id. */
 export function writeCommandIdOf(work: Pick<SyncWorkRow, "subject">): number | null {
@@ -352,6 +361,12 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
       });
       if (verdict.kind === "refuse") return local({ action: "refuse", commandId: command.id, reason: verdict.reason });
       if (verdict.kind === "wait") return { kind: "wait", reason: verdict.reason === "not_before" ? "not_due" : "dependency", until: verdict.until };
+      // An agent's new title of a vault album (0451): the row names it all, no approval.
+      if (command.publicationId === null && command.step === "album_edit") {
+        const derived = deriveFanslyAlbumEditCommand({ command });
+        if (!derived.ok) return local({ action: "refuse", commandId: command.id, reason: derived.reason });
+        return { kind: "request", request: derived.request };
+      }
       // A post with no Hub publication (0369): its own post, no approval.
       if (command.publicationId === null) {
         const schedule = command.step === "post_cancel" ? await store.readPostSchedule(ctx.db, command.pageId) : null;
@@ -416,8 +431,8 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
       }
       const withdraw = FANSLY_WITHDRAW_STEPS.includes(command.step);
       if (command.publicationId === null) {
-        // A post with no publication (0369): only a cancel or a delete, of its own post.
-        if (!withdraw || command.postRef === null) refuseAdmission(id, "step_needs_publication");
+        // A post with no publication (0369): only a cancel or a delete, of its own post; or an album's new title (0451).
+        if (!publicationLess(command)) refuseAdmission(id, "step_needs_publication");
       } else {
         // The approval still stands, under the row lock of this transaction: an
         // edit, a cancel or a new approval between the plan and now refuses.
@@ -451,8 +466,8 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
         input.settings === undefined ? Promise.resolve(undefined) : input.settings.field("publishingEnabled"),
       ]);
       if (command.publicationId === null) {
-        // A post with no publication (0369): a cancel or a delete of its own post.
-        if (!withdraw || command.postRef === null) return "step_needs_publication";
+        // A post with no publication (0369): a cancel or a delete of its own post; or an album's new title (0451).
+        if (!publicationLess(command)) return "step_needs_publication";
       } else {
         if (publication === null) return "publication_missing";
         if (withdraw ? publication.status !== FANSLY_WITHDRAW_STEP_STATUS[command.step] : !["approved", "submitting"].includes(publication.status) || publication.approvedRevisionId !== facts?.revisionId) {

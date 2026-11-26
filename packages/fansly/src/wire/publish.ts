@@ -259,6 +259,7 @@ export type FanslyPublishWireId =
   | "publish.vault_album_create"
   | "publish.vault_album_media"
   | "publish.vault_album_rename"
+  | "publish.vault_album_edit"
   | "lists.create"
   | "lists.add"
   | "lists.remove";
@@ -310,6 +311,12 @@ export const FANSLY_VERIFIED_WRITE_ROUTES: readonly (FanslyPublishWireId | Fansl
   // §13, and again live on the test model 2026-11-03 with the page's own
   // session — the call carried only `authorization` and was accepted.
   "publish.vault_album_rename",
+  // A vault album's own title changed (the contract §13, live on the test
+  // model 2026-11-27): the site's «Edit Album Details» sends `POST
+  // /vault/albums/edit` with the whole album; `{id, title, description}`
+  // alone, with only `authorization`, was accepted and kept the album's
+  // place — a description left out is cleared, so it always goes.
+  "publish.vault_album_edit",
   // The page's user lists (fan set lists, 2026-10-28, the test model's own
   // session): `POST /lists` `{label, description: ""}` (the site's create
   // modal) → `{accountId, type: 1, label, id}`; `POST /lists/items/add`
@@ -619,6 +626,27 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in FanslyPublishWireId]: F
       const customFilename = nonBlank("customFilename", p.customFilename);
       if (customFilename.length > FANSLY_VAULT_CARD_NAME_MAX) throw new RangeError(`Fansly publishing parameter customFilename is over ${FANSLY_VAULT_CARD_NAME_MAX} characters`);
       return { albumId: nonBlank("albumId", p.albumId), mediaId: nonBlank("mediaId", p.mediaId), customFilename };
+    },
+    parse: journalFirst,
+  },
+  "publish.vault_album_edit": {
+    id: "publish.vault_album_edit",
+    credentials: "session",
+    kind: "publish_vault_album_edit",
+    host: "api",
+    method: "POST",
+    writeContract: writeContract("publish.vault_album_edit"),
+    endpointTemplate: "/vault/albums/edit",
+    legacyOperation: null,
+    path: () => "/vault/albums/edit",
+    query: noQuery,
+    // The contract §13 (live on the test model 2026-11-27): the album, its new
+    // title and its description as it stands — one left out is cleared.
+    body: (p) => {
+      const title = nonBlank("title", p.title);
+      if (title.length > FANSLY_VAULT_ALBUM_TITLE_MAX) throw new RangeError(`Fansly publishing parameter title is over ${FANSLY_VAULT_ALBUM_TITLE_MAX} characters`);
+      if (typeof p.description !== "string") throw new RangeError("Fansly publishing parameter description must be a string");
+      return { id: nonBlank("albumId", p.albumId), title, description: p.description };
     },
     parse: journalFirst,
   },

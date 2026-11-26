@@ -39,6 +39,8 @@ export const FANSLY_WRITE_STEP_ROUTES: Readonly<Record<FanslyWriteStep, FanslyWi
   // 2026-11-04): the catalog's own read of an album's page, through the
   // page's browser as every read — no write, no new route.
   album_read: "vault.media",
+  // An agent's new title of a page's vault album (0451): no publication.
+  album_edit: "publish.vault_album_edit",
 };
 
 /** Every route a write command sends: the registry entries' operations. */

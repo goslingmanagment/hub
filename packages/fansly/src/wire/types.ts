@@ -97,6 +97,7 @@ export type FanslyObservationKind =
   | "publish_vault_album_create"
   | "publish_vault_album_media"
   | "publish_vault_album_rename"
+  | "publish_vault_album_edit"
   | "purchase_history"
   | "recapstats"
   | "referral_stats"
@@ -350,6 +351,9 @@ export interface FanslyWireParamsById {
    *  on the test model 2026-11-03): the media Fansly already had comes back
    *  under its old name. */
   "publish.vault_album_rename": { albumId: string; mediaId: string; customFilename: string };
+  /** A vault album's own title changed (checked live on the test model
+   *  2026-11-27): its description goes as it stands, one left out is cleared. */
+  "publish.vault_album_edit": { albumId: string; title: string; description: string };
   // ── the page's user lists Hub keeps (fan set lists, 2026-10-28) ───────────
   /** A user list of the page created with its label (no description). */
   "lists.create": { label: string };
@@ -559,6 +563,7 @@ export interface FanslyWireResultById {
   "publish.vault_album_create": unknown;
   "publish.vault_album_media": unknown;
   "publish.vault_album_rename": unknown;
+  "publish.vault_album_edit": unknown;
   "lists.create": unknown;
   "lists.add": unknown;
   "lists.remove": unknown;

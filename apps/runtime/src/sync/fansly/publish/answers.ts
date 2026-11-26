@@ -217,6 +217,22 @@ export function readWriteAnswer(step: FanslyWriteStep, response: unknown, params
       }
       return { ok: true, result: { renamed: true, customFilename: shown } };
     }
+    case "album_edit": {
+      // The album with its new title (the contract §13, live 2026-11-27):
+      // `{id, accountId, pos, title, description, type, status, …}`. Another
+      // album, or another title than asked, did not rename it as asked: the
+      // album's title is unknown until a person or a listing looks.
+      if (!isRecord(response)) return { ok: false, reason: "answer_not_an_object" };
+      const albumId = isRecord(params) ? idOf(params.albumId) : null;
+      const asked = isRecord(params) && typeof params.title === "string" ? params.title : null;
+      if (idOf(response.id) === null) return { ok: false, reason: "answer_without_album_id" };
+      if (albumId !== null && idOf(response.id) !== albumId) return { ok: false, reason: "answer_album_differs" };
+      const title = typeof response.title === "string" ? response.title : null;
+      if (title === null) return { ok: false, reason: "answer_without_title" };
+      if (asked !== null && title !== asked) return { ok: false, reason: "answer_title_differs" };
+      const description = typeof response.description === "string" ? response.description : null;
+      return { ok: true, result: { albumId: idOf(response.id), title, description } };
+    }
     case "album_read": {
       // One page of a vault album read back (0352, the contract §13):
       // `{albumMedia: [{id, mediaId, albumId, createdAt, customFilename}],

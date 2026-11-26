@@ -122,7 +122,11 @@ page's schedule (an hour old at most) shows it. A key with `delete:posts`
 deletes a published post among its page's own posts
 (`/agent/pages/{label}/posts/{postRef}/delete`): a daily ceiling per key
 (`AGENT_POST_DELETE_DAILY_LIMIT_PER_KEY`), one command per post whichever route
-asks, its reason in the owner's audit row with the key. A whole page's
+asks, its reason in the owner's audit row with the key. A key that drafts and
+approves vault albums (`write:publication_drafts` with `approve:publications` or
+`approve:vault_albums`) also renames a Fansly vault album of its pages
+(`/agent/pages/{label}/vault-album-renames`, 0451): no approval, one command on
+the page's engine, the owner's audit row names the key. A whole page's
 withdrawal stays the owner's. A page outside the grant is the plane's static 404, a key without the
 capability 403. The rows are held by `publications.integration`,
 `publications-fansly-withdraw.integration` and `agent-post-commands.integration`.
