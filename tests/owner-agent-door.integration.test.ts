@@ -312,6 +312,8 @@ describe("the owner's agent door", () => {
       if (answer.statusCode !== 403) admitted.push(`${row.method} ${row.url} ${answer.statusCode}`);
     }
     expect(admitted).toEqual([]);
+    // A public route that reads the principal itself: the static reports' guard takes a person alone.
+    expect((await server!.inject({ method: "GET", url: "/api/v1/auth/static-reports", headers: { authorization: `Bearer ${ownerKey}` } })).statusCode).toBe(401);
     // …and its own route refuses a person, an agent key, nobody, and a key acting as the test team's owner.
     const own = { method: "POST" as const, url: "/api/v1/owner-agent/call", payload: { op: "people.show", args: { code: "anna" } } };
     const reason = { "x-hub-owner-reason": "x" };

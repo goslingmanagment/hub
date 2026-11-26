@@ -1,8 +1,9 @@
-import type { AgentCustomSaleRefusal, AgentSaleRequest } from "@agency_hub_core/contracts";
+import { SHIFT_REVIEW_DELETED_UNSEEN_SECONDS, type AgentCustomSaleRefusal, type AgentSaleRequest } from "@agency_hub_core/contracts";
 import {
   findCustomPageMessage,
   findTransactionIdsByPlatformRef,
   hasCustomOrderRejection,
+  listCustomFileSends,
   listCustomMessagePurchases,
   listCustomModelPages,
   listCustomOrderEvidenceFloors,
@@ -131,10 +132,12 @@ export async function checkPersonSale(db: Database, order: CustomOrderRow, trans
  * order's model among the key's pages (else not found), sent by the page to an account of the order's fan (the chat's
  * fan, never a media offer's recipient), after the order was recorded and after its last revision request and a person's
  * last «не отдан» (a message of before them is the version sent back, or the delivery taken off), with media; a priced
- * one — its own price or an offer's — bought (`ppvBoughtSql`). Refused while the order has its code-named files (the
- * exact rule's own list, `listCustomOrderNamedFiles`: Hub finds their delivery) and for a message a person took off the
- * order. Answers the message's time and its purchases by the fan (`listCustomMessagePurchases`: the order's money by
- * construction, linked with the mark).
+ * one — its own price or an offer's — bought (`ppvBoughtSql`). While the order has its code-named files (the exact
+ * rule's own list, `listCustomOrderNamedFiles`: Hub finds their delivery), only a message that carried one of them to the
+ * order's fan in this round (`listCustomFileSends`, as the exact rule reads it) — the agent then points at Hub's own
+ * evidence, say the finished file sent while its raw parts named with the code never were; refused for any other, and
+ * for a message a person took off the order. Answers the message's time and its purchases by the fan
+ * (`listCustomMessagePurchases`: the order's money by construction, linked with the mark).
  */
 export async function checkGivenMessage(
   db: Database,
@@ -153,13 +156,19 @@ export async function checkGivenMessage(
   if (message.at === null || message.at.getTime() < order.createdAt.getTime()) throw refused("The message was sent before the order was recorded", "before_order");
   if (message.media === 0) throw refused("The message carries no media", "no_media");
   if (message.priceMills > 0 && !message.bought) throw refused("The message is priced and the fan has not bought it", "not_bought");
-  if ((await listCustomOrderNamedFiles(db, [order.id])).length > 0) {
-    throw refused("A vault file carries the order's code: Hub finds its delivery by itself", "code_named_file");
+  const floor = (await listCustomOrderEvidenceFloors(db, [order.id])).get(order.id);
+  const files = await listCustomOrderNamedFiles(db, [order.id]);
+  if (files.length > 0) {
+    // A message of before the last revision request or a person's «не отдан» is not this round's delivery (deliveries.ts).
+    const since = floor !== undefined && floor.getTime() > order.createdAt.getTime() ? floor : order.createdAt;
+    const sends = await listCustomFileSends(db, { files, fanIds: [...fans], since, unseenSeconds: SHIFT_REVIEW_DELETED_UNSEEN_SECONDS });
+    if (!sends.some((send) => send.pageId === message.pageId && send.messageRef === messageRef)) {
+      throw refused("A vault file carries the order's code and this message carried none of them: Hub finds its delivery by itself", "code_named_file");
+    }
   }
   if (await hasCustomOrderRejection(db, { orderId: order.id, kind: "given", ref: messageRef })) {
     throw refused("A person took this message off the order", "rejected");
   }
-  const floor = (await listCustomOrderEvidenceFloors(db, [order.id])).get(order.id);
   if (floor !== undefined && message.at.getTime() < floor.getTime()) {
     throw refused("The message was sent before the order's last revision or a person's «не отдан»", "before_revision");
   }
