@@ -2,6 +2,8 @@ import { useMemo, useState, type ReactNode } from "react";
 import { BUSINESS_TIME_ZONE, sumMills, toBusinessDate } from "@agency_hub_core/shared";
 import { useRevenueChart, useRevenueChartComparison } from "@/api/overview";
 import { ChartTable } from "@/components/charts/ChartTable";
+import { MoneyDelta } from "@/components/money/Delta";
+import { ruPlural } from "@/lib/plural";
 import { RevenueLineChart, dayChange, type RevenueGoal, type RevenueLinePoint } from "@/components/charts/RevenueLineChart";
 import { businessDateRange } from "@/components/charts/scale";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -37,6 +39,23 @@ function dailyPoints(current: Series, previous: Series | undefined, window: Reve
       incomplete: date === now,
     };
   });
+}
+
+/** The average of whole mills, or nothing to average. */
+function averageMills(values: readonly number[]): number | null {
+  return values.length === 0 ? null : Math.round(Number(sumMills(values)) / values.length);
+}
+
+/**
+ * Money a day (owner, 2026-11-28): the period's finished days only — today is still
+ * going and would pull the average down — against the previous period's days.
+ */
+export function dailyPace(points: readonly RevenueLinePoint[]) {
+  const current = averageMills(points.flatMap((point) => (point.current === null || point.incomplete ? [] : [point.current])));
+  const previous = averageMills(points.flatMap((point) => (point.previous === null || point.previous === undefined ? [] : [point.previous])));
+  const delta = current !== null && previous !== null ? current - previous : null;
+  const pct = delta !== null && previous ? (delta / Math.abs(previous)) * 100 : null;
+  return { current, days: points.filter((point) => point.current !== null && !point.incomplete).length, delta, pct };
 }
 
 function monthlyPoints(current: Series): RevenueLinePoint[] {
@@ -84,10 +103,12 @@ export function RevenueDailyCard({ scope, title = "Доход по дням", pe
   const monthly = allowMonthly && period === "all" && step === "month";
   const series = daily.data?.series;
   const previousSeries = compared ? previous.data?.series : undefined;
-  const points = useMemo(
-    () => (!series ? [] : monthly ? monthlyPoints(series) : dailyPoints(series, previousSeries, period === "all" ? null : main)),
-    [main, monthly, period, previousSeries, series],
+  const days = useMemo(
+    () => (!series ? [] : dailyPoints(series, previousSeries, period === "all" ? null : main)),
+    [main, period, previousSeries, series],
   );
+  const points = useMemo(() => (!series ? [] : monthly ? monthlyPoints(series) : days), [days, monthly, series]);
+  const pace = dailyPace(days);
   const formatDate = monthly ? formatBusinessDateMonth : formatBusinessDateShort;
   const currentLabel = main?.from && main.to && compared ? formatWindowRange(main.from, main.to) : "Доход";
   const previousLabel = compared && previousSeries ? revenueComparisonRange(main) ?? undefined : undefined;
@@ -99,6 +120,12 @@ export function RevenueDailyCard({ scope, title = "Доход по дням", pe
           <h2 className="card-title">{title}</h2>
           {totalMills !== null && totalMills !== undefined && (
             <p className="card-description">Итого за период: <span className="font-medium text-text-primary tabular-nums">{formatMills(totalMills)}</span></p>
+          )}
+          {!single && pace.current !== null && (
+            <p className="card-description" title={`Среднее за ${pace.days} ${ruPlural(pace.days, "полный день", "полных дня", "полных дней")}: сегодняшний день ещё идёт и в среднее не входит`}>
+              В среднем в день: <span className="font-medium text-text-primary tabular-nums">{formatMills(pace.current)}</span>
+              {compared && pace.delta !== null && <> <MoneyDelta mills={pace.delta} pct={pace.pct} /></>}
+            </p>
           )}
         </div>
         {allowMonthly && period === "all" && (
