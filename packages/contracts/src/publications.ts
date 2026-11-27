@@ -719,3 +719,52 @@ export const agentVaultAlbumQuoteResponseSchema = z.object({
   sending: z.object({ on: z.boolean(), why: z.string().nullable() }),
 });
 export type AgentVaultAlbumQuoteResponse = z.infer<typeof agentVaultAlbumQuoteResponseSchema>;
+
+// --- A Fansly vault album renamed by an agent (0451) -------------------------
+
+/** A Fansly vault album's title at most (Hub's bound, as a new album's). */
+export const AGENT_VAULT_ALBUM_TITLE_MAX = 120;
+
+export const agentVaultAlbumRenameBodySchema = z.strictObject({
+  /** The album by its exact title now (the spaces at its edges aside); or `albumRef`. */
+  album: z.string().trim().min(1).max(500).optional(),
+  /** The album by Fansly's id; or `album`. */
+  albumRef: z.string().regex(/^[0-9]{1,30}$/).optional(),
+  /** Its new title. */
+  title: z.string().trim().min(1).max(AGENT_VAULT_ALBUM_TITLE_MAX),
+});
+
+export const agentVaultAlbumRenameParamsSchema = z.object({
+  pageLabel: z.string().min(1),
+  commandId: z.coerce.number().int().positive(),
+});
+
+export const agentVaultAlbumRenameResponseSchema = z.object({
+  pageLabel: z.string(),
+  /** The album (null: not resolved). */
+  albumRef: z.string().nullable(),
+  /** Its title as Hub knew it when asked (null: not resolved, or a rename read by its id). */
+  fromTitle: z.string().nullable(),
+  /** The title asked for. */
+  title: z.string(),
+  /**
+   * accepted — Hub queued ONE command on the page's engine: follow it with its `commandId`;
+   * renamed — Fansly answered with the album under the new title (Hub's copy holds it);
+   * unknown — the request may or may not have renamed it: nothing is sent again, a person looks (`check`);
+   * rejected — Fansly said no: the album keeps its title;
+   * not_sent — the command never left (`reason`): ask again;
+   * refused — Hub sent nothing (`reason`).
+   */
+  outcome: z.enum(["accepted", "renamed", "unknown", "rejected", "not_sent", "refused"]),
+  reason: z.string().nullable(),
+  /** Hub already held this rename: this answers from it, and nothing was sent now. */
+  repeat: z.boolean(),
+  /** The command to follow (`GET …/vault-album-renames/<commandId>`); null: none. */
+  commandId: z.number().int().nullable(),
+  command: agentPostCommandStateSchema.nullable(),
+  /** The page's albums the title named, when it named more than one (`album_title_ambiguous`). */
+  albums: z.array(z.object({ albumRef: z.string(), title: z.string().nullable() })).nullable(),
+  /** unknown: what a person checks on the platform. */
+  check: z.string().nullable(),
+});
+export type AgentVaultAlbumRenameResponse = z.infer<typeof agentVaultAlbumRenameResponseSchema>;

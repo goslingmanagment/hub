@@ -923,6 +923,22 @@ function notedPostAnswer<T extends { outcome: string }>(answer: T): T | HubNoted
   return answer;
 }
 
+const ALBUM_RENAME_ACCEPTED_NOTE =
+  "Accepted is not renamed yet: Hub queued ONE command on the page's engine. Follow it with hub vault-album-rename-get"
+  + " --page-label <page> --id <commandId> in a minute or two: renamed, unknown (a person looks at the album on Fansly)"
+  + " or not_sent (ask again).";
+
+const ALBUM_RENAME_UNKNOWN_NOTE =
+  "Unknown is NOT renamed: Hub does not know whether Fansly renamed the album, and never sends it again. Tell the"
+  + " owner (the page, the album, both titles, `check`); do not report it as done.";
+
+/** `vault-album-rename`'s and `vault-album-rename-get`'s answer, with a note when it is not an end. */
+function notedRenameAnswer<T extends { outcome: string }>(answer: T): T | HubNotedResult {
+  if (answer.outcome === "accepted") return new HubNotedResult(answer, ALBUM_RENAME_ACCEPTED_NOTE);
+  if (answer.outcome === "unknown") return new HubNotedResult(answer, ALBUM_RENAME_UNKNOWN_NOTE);
+  return answer;
+}
+
 const PUBLICATION_WITHDRAW_ACCEPTED_NOTE =
   "Accepted is not withdrawn yet: Hub sends the cancel once a fresh read of the schedule still shows the post, then"
   + " reads again. Follow it with publication-get: withdrawn, unknown (a person checks Fansly) or still scheduled"
@@ -4157,6 +4173,46 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     run: async (client, values) => notedPostAnswer(await client.agentPostDelete({
       params: { pageLabel: requireString(values, "page-label"), postRef: requireString(values, "post-ref") },
       body: { reason: requireString(values, "reason") },
+    })),
+  },
+  {
+    name: "vault-album-rename",
+    operation: "agentVaultAlbumRename",
+    summary:
+      "Rename a Fansly vault album of your page — the album's own title, not a card's. The album by its exact title now"
+      + " (--album) or its id (--album-id), among the page's albums Hub knows; refused when the title names none or"
+      + " several (albums lists them), or the new title is its title already or another album's. No approval (fans do"
+      + " not see albums): ONE command on the page's engine, never sent again; asking the same again answers where it"
+      + " stands. Needs write:publication_drafts and approve:publications or approve:vault_albums.",
+    options: {
+      "page-label": { kind: "string", describe: "The Fansly page (required)" },
+      album: { kind: "string", describe: "The album's exact title now (or --album-id)" },
+      "album-id": { kind: "string", describe: "The album's Fansly id (or --album)" },
+      title: { kind: "string", describe: "Its new title (required, up to 120 characters)" },
+    },
+    hint: publicationHint,
+    run: async (client, values) => {
+      const album = readString(values, "album");
+      const albumRef = readString(values, "album-id");
+      if ((album === undefined) === (albumRef === undefined)) throw new HubUsageError("name the album by --album (its exact title now) or --album-id, one of them");
+      return notedRenameAnswer(await client.agentVaultAlbumRename({
+        params: { pageLabel: requireString(values, "page-label") },
+        body: { ...(album === undefined ? {} : { album }), ...(albumRef === undefined ? {} : { albumRef }), title: requireString(values, "title") },
+      }));
+    },
+  },
+  {
+    name: "vault-album-rename-get",
+    operation: "agentVaultAlbumRenameGet",
+    summary: "Where a rename of a Fansly vault album stands, by the commandId vault-album-rename answered: accepted,"
+      + " renamed, unknown (a person looks; never sent again), rejected or not_sent. Reads only.",
+    options: {
+      "page-label": { kind: "string", describe: "The Fansly page (required)" },
+      id: { kind: "number", describe: "The rename's commandId (required)" },
+    },
+    hint: publicationHint,
+    run: async (client, values) => notedRenameAnswer(await client.agentVaultAlbumRenameGet({
+      params: { pageLabel: requireString(values, "page-label"), commandId: requireId(values, "id") },
     })),
   },
   {

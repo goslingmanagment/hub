@@ -1130,6 +1130,42 @@ describe("a post with no Hub publication (an agent's cancel or delete, 0369)", (
   });
 });
 
+describe("an agent's new title of a vault album (0451): no publication", () => {
+  it("goes as its row names it, under a create's switches, no publication read or locked", async () => {
+    const edit = command({
+      step: "album_edit", dispatchId: null, publicationId: null, postRef: null,
+      albumEdit: { albumRef: "971155664292311040", title: "PPV-024 Белое бельё", description: "keep me" },
+    });
+    const state = fresh({ command: edit });
+    const store: WriteModuleStore = {
+      ...fakeStore(state),
+      async readDeriveContext() {
+        throw new Error("an album's title has no approval to read");
+      },
+      async lockPublication() {
+        throw new Error("an album's title locks no publication");
+      },
+      async readPublication() {
+        throw new Error("an album's title reads no publication");
+      },
+    };
+    const module = fanslyWriteModule(store);
+    // Publishing off: refused, never a request (a rename is no withdrawal).
+    const off = fakeSettings(() => ({ publishingEnabled: false }));
+    expect(await module.plan(WORK, planContext({ settings: off }))).toMatchObject({ kind: "local", detail: { action: "refuse", reason: "publishing_off" } });
+    const plan = await module.plan(WORK, planContext());
+    expect(plan).toMatchObject({
+      kind: "request",
+      request: { spec: "publish.vault_album_edit", params: { albumId: "971155664292311040", title: "PPV-024 Белое бельё", description: "keep me" } },
+    });
+    await admitOnce(module, plan, 8);
+    expect(state.admitted).toBe(1);
+    expect(state.command.request).toMatchObject({ spec: "publish.vault_album_edit", pathAndQuery: expect.stringContaining("/vault/albums/edit") });
+    expect(await module.confirmWrite!(db, WORK, { attemptId: 8, writeFingerprint: state.command.requestFingerprint!, settings: fakeSettings(() => ({ publishingEnabled: true })) })).toBeNull();
+    expect(await module.confirmWrite!(db, WORK, { attemptId: 8, writeFingerprint: state.command.requestFingerprint!, settings: off })).toBe("publishing_off");
+  });
+});
+
 describe("the module: the switches refuse before anything is admitted", () => {
   it("an unverified route, publishing off: refused, never a request", async () => {
     for (const [overrides, reason] of [

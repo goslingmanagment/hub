@@ -700,6 +700,22 @@ The path of one post:
    `publication-get` carries `albumRun` (step, files by outcome, the file
    going up, credits spent of the estimate, the stop reason) and a one-line
    `note` of it.
+
+   **Renaming a Fansly vault album** (its own title, not a card's): `hub
+   vault-album-rename --page-label <page> --album "<its exact title now>"
+   --title "<new title>"`, or `--album-id <id>` instead of `--album`
+   (`POST /api/v1/agent/pages/<page>/vault-album-renames`, `{album | albumRef,
+   title}`). The album is one of the page's albums Hub knows; refused, nothing
+   sent, when the title names none (`album_not_found`) or several
+   (`album_title_ambiguous`, `albums` lists them: ask which, then
+   `--album-id`), when it is its title already (`title_unchanged`) or another
+   album's (`title_taken`), or while an earlier rename of it is under way or
+   ended unknown. No approval (fans do not see albums), the same rights as
+   approving one. `accepted` is ONE command on the page's engine: follow it
+   with `hub vault-album-rename-get --page-label <page> --id <commandId>` —
+   `renamed` (Hub's copy holds the new title), `unknown` (never sent again:
+   tell the owner), `rejected`, `not_sent` (ask again). The same rename asked
+   again answers where it stands. OnlyFans albums are not renamed here.
 3. **Follow it.** `hub publication-list --page-label lilly-1 [--status draft]
    [--from … --to …]` (by publish time) and `hub publication-get --id <id>`
    (a draft's findings re-checked now, the status journal). To poll your own:
@@ -1351,6 +1367,8 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub media-look` | Frames (≤ 512 px) of a file of the page on Fansly — a post in its schedule or a published one (`--post-ref`, `--publication-id`), a file of its own vault (`--media-ref`): a video's sample or cover, a photo; `--out DIR` writes them as JPEGs. One request for a scheduled post, two for the others, one look. Reads a queued look again up to `--wait`. Needs `look:media`. |
 | `hub media-look-get` | A media look by its id, finished now when the page's engine has answered; `--out DIR` as above. Needs `look:media`. |
 | `hub publication-file-upload` | COMPOSITE: files from disk (bare paths) into Hub for a page's model: those Hub holds (by SHA-256) are not sent again, the others streamed whole, a lost network waited for; per file `media: "file:<id>"` for a draft. Progress on stderr. |
+| `hub vault-album-rename` | Rename a Fansly vault album of your page (its own title) by its exact title now (`--album`) or id (`--album-id`) to `--title`; refused when the title names none or several, or the new title is taken. One command, never resent; `accepted` is followed with `vault-album-rename-get`. Needs `write:publication_drafts` and `approve:publications` or `approve:vault_albums`. |
+| `hub vault-album-rename-get` | Where a vault album's rename stands, by its `--id` (`commandId`): accepted, renamed, unknown, rejected, not_sent. |
 | `hub vault-album-draft` | COMPOSITE: a Fansly or OnlyFans vault album draft from a pack's folder (a bare path), its files in name order, the first on top; again after a break it sends only what Hub lacks; `--dry-run` lists it and uploads nothing (OnlyFans: with Hub's price, the day's account, the album found / new / similar, the files by hand). OnlyFans needs `--max-credits`; `--album-ref` / `--new-album` answer a similar title. |
 | `hub queue-preview` | How many fans a rule or a list puts in a fan queue, what it leaves out, the rule in Hub's words and a few fans. Nothing is written. Needs `write:fan_queues`. |
 | `hub queue-create` | Create a fan queue, only after the «да» of the person who asked; `--requested-by` and `--idempotency-key` required. |

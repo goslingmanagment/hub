@@ -48,6 +48,10 @@ Fansly: \`order_differs\`, \`files_missing\`, \`cards_not_renamed\`, \`album_not
 
 \`hub publication-get --id <id>\` с ответом в файл, затем \`hub publication-create --page-label <страница> --file <этот файл> --publish-at <сейчас, RFC 3339> --idempotency-key <новый uuid>\`. На OnlyFans перед одобрением \`hub publication-get --id <новый id>\`: \`albumRun.estimateCredits\` — цена дозаливки; назови её и одобряй только после «да». Тот же альбом (по \`vaultAlbumRef\`), те же файлы: Hub зальёт только то, чего в альбоме нет. Hub хранит байты 7 дней после выхода альбома; позже — залей пак заново, как в «Залить». Fansly \`upload_complete_500\` — назови файл и скажи владельцу.
 
+## Переименовать альбом (Fansly)
+
+\`hub vault-album-rename --page-label <страница> --album "<точное название сейчас>" --title "<новое>"\` (или \`--album-id <id>\` вместо \`--album\`). Это название самого альбома, не карточек. Одобрения не нужно, но просьба человека нужна: переименовывай только то, что просили. Отказ \`album_not_found\`, \`album_title_ambiguous\` (в \`albums\` все с этим названием: спроси, какой, и повтори с \`--album-id\`), \`title_unchanged\`, \`title_taken\` — назови причину. \`accepted\` — ещё не готово: через минуту-две \`hub vault-album-rename-get --page-label <страница> --id <commandId>\`. \`renamed\` — готово. \`unknown\` — не повторяй, скажи владельцу. \`not_sent\` — можно попросить ещё раз. На OnlyFans переименования здесь нет.
+
 ## Что выходит за этот скилл
 
 Посты на стену, удаление альбомов и файлов, настройки публикаций, потолок и кредиты: это к владельцу. Ошибка \`Cannot find\`, нет Node или файла \`$HOME/.hub/hub.mjs\`: это установка, скажи об этом, а не обходи.

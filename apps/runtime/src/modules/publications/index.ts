@@ -56,6 +56,7 @@ import { quoteVaultAlbum, withOnlyfansAlbumRuns } from "../../services/publicati
 import { listFanslyQueueWire } from "../../services/publications-fansly-checks.ts";
 import { deleteFanslyPublication } from "../../services/publications-fansly-delete.ts";
 import { deletePagePost, withdrawPagePost, type PostCommandPage, type PostCommandResult } from "../../services/post-commands.ts";
+import { renameVaultAlbum, vaultAlbumRenameById, type VaultAlbumRenameResult } from "../../services/vault-album-renames.ts";
 import { withdrawAllFanslyPublications, withdrawFanslyPublications } from "../../services/publications-fansly-withdraw.ts";
 import {
   listOnlyfansQueueWire,
@@ -96,6 +97,11 @@ export const PUBLICATION_DELETE_POST_AUDIT_EVENT = "admin.publication_delete_pos
  *  the outcome and, for a deletion, the agent's reason in its words. */
 export const PAGE_POST_WITHDRAW_AUDIT_EVENT = "admin.page_post_withdraw";
 export const PAGE_POST_DELETE_AUDIT_EVENT = "admin.page_post_delete";
+/** An agent key's rename of a Fansly vault album (0451): the key, the page, the album, both titles, the outcome. */
+export const VAULT_ALBUM_RENAME_AUDIT_EVENT = "admin.vault_album_rename";
+/** The agent operations renaming a Fansly vault album and following it (0451). */
+const VAULT_ALBUM_RENAME_OPERATION = "agentVaultAlbumRename";
+const VAULT_ALBUM_RENAME_GET_OPERATION = "agentVaultAlbumRenameGet";
 
 /**
  * Publications (docs/plans/2026-10-23-wall-posts, spec §9). The owner drafts,
@@ -875,6 +881,81 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
       return quote;
     }, () => 1);
   });
+
+  // A Fansly vault album renamed (0451): the right that makes and approves one (write:publication_drafts, and
+  // approve:publications or approve:vault_albums), no approval of its own — albums are invisible to fans. One
+  // command on the page's engine; the key's owner and the page in the owner's audit.
+  async function renameScope(request: Parameters<typeof requireAgentKeyPrincipal>[0], operation: string, pageLabel: string) {
+    const caller = await requireAgentKeyPrincipal(request);
+    const vaultAlbumsOnly = !caller.capabilities.includes("approve:publications") && caller.capabilities.includes("approve:vault_albums");
+    const { principal, scope } = await agentScope(request, operation, [
+      "write:publication_drafts",
+      vaultAlbumsOnly ? "approve:vault_albums" : "approve:publications",
+    ]);
+    const granted = scope.pages.find((candidate) => candidate.pageLabel === pageLabel);
+    return { principal, scope, granted };
+  }
+
+  server.post("/api/v1/agent/pages/:pageLabel/vault-album-renames", { schema: routeSchemas.agentVaultAlbumRename }, async (request) => {
+    const { principal, scope, granted } = await renameScope(request, VAULT_ALBUM_RENAME_OPERATION, request.params.pageLabel);
+    return settled(scope, async () => {
+      if (!granted) throw staticNotFound();
+      if (granted.platform !== "fansly") throw new BadRequestError("only a Fansly page's vault albums are renamed here");
+      const { album, albumRef, title } = request.body;
+      if ((album === undefined) === (albumRef === undefined)) throw new BadRequestError("name the album by album (its exact title now) or by albumRef, one of them");
+      const page = { id: granted.id, pageLabel: granted.pageLabel };
+      const result = await renameVaultAlbum(appContext, { page, asked: albumRef !== undefined ? { albumRef } : { title: album! }, title });
+      await auditVaultAlbumRename(principal, page, result);
+      return result;
+    }, () => 1);
+  });
+
+  server.get("/api/v1/agent/pages/:pageLabel/vault-album-renames/:commandId", { schema: routeSchemas.agentVaultAlbumRenameGet }, async (request) => {
+    const { scope, granted } = await renameScope(request, VAULT_ALBUM_RENAME_GET_OPERATION, request.params.pageLabel);
+    return settled(scope, async () => {
+      if (!granted || granted.platform !== "fansly") throw staticNotFound();
+      const result = await vaultAlbumRenameById(appContext, { page: { id: granted.id, pageLabel: granted.pageLabel }, commandId: request.params.commandId });
+      if (result === null) throw staticNotFound();
+      return result;
+    }, () => 1);
+  });
+
+  async function auditVaultAlbumRename(
+    principal: Awaited<ReturnType<typeof requireAgentKeyPrincipal>>,
+    page: { id: number; pageLabel: string },
+    result: VaultAlbumRenameResult,
+  ) {
+    await recordAudit({ db }, {
+      ...auditCtx(principal),
+      eventType: VAULT_ALBUM_RENAME_AUDIT_EVENT,
+      platformAccountId: page.id,
+      metadata: {
+        pageLabel: page.pageLabel,
+        albumRef: result.albumRef,
+        fromTitle: result.fromTitle,
+        title: result.title,
+        outcome: result.outcome,
+        reason: result.reason,
+        repeat: result.repeat,
+        commandId: result.commandId,
+      },
+    });
+    await writeAgentAudit(db, {
+      agentKeyId: principal.agentKeyId,
+      operation: VAULT_ALBUM_RENAME_OPERATION,
+      pageIds: [page.id],
+      verbatimText: false,
+      requestSummary: {
+        albumRef: result.albumRef,
+        outcome: result.outcome,
+        reasonCode: /^[a-z0-9_]{1,64}/.exec(result.reason ?? "")?.[0] ?? null,
+        repeat: result.repeat,
+        commandId: result.commandId,
+        textSha256: createHash("sha256").update(result.title).digest("hex"),
+        textLength: result.title.length,
+      },
+    });
+  }
 
   server.get("/api/v1/agent/publications/:id", { schema: routeSchemas.agentPublicationGet }, async (request) => {
     const { scope } = await agentScope(request, "agentPublicationGet");

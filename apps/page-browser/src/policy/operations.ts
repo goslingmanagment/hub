@@ -707,6 +707,10 @@ export const HUB_PUBLISH_ROWS: readonly HubPublishRow[] = [
   // §13; live on the test model 2026-11-03). An operator without this row
   // refuses it before anything leaves.
   { host: API_HOST, method: "POST", template: "/vault/albums/media/rename", route: "publish.vault_album_rename", permission: "create", what: "a card of a vault album renamed", example: "/vault/albums/media/rename" },
+  // 0451: a vault album's own title changed, by an agent (the contract §13;
+  // the site's «Edit Album Details», live on the test model 2026-11-27). An
+  // operator without this row refuses it before anything leaves.
+  { host: API_HOST, method: "POST", template: "/vault/albums/edit", route: "publish.vault_album_edit", permission: "create", what: "a vault album's title changed", example: "/vault/albums/edit" },
   // 2026-10-28: the page's user list Hub keeps (fan set lists): created,
   // accounts added to it and removed from it (the site's own bodies). An
   // operator without these rows refuses them before anything leaves.

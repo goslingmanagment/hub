@@ -12,6 +12,9 @@ import {
   agentPublicationTargetsResponseSchema,
   agentVaultAlbumQuoteBodySchema,
   agentVaultAlbumQuoteResponseSchema,
+  agentVaultAlbumRenameBodySchema,
+  agentVaultAlbumRenameParamsSchema,
+  agentVaultAlbumRenameResponseSchema,
   publicationApproveBodySchema,
   publicationApproveResponseSchema,
   publicationCreateBodySchema,
@@ -247,6 +250,24 @@ export const publicationRouteSchemas = {
     params: publicationPageParamsSchema,
     body: agentVaultAlbumQuoteBodySchema,
     response: { 200: agentVaultAlbumQuoteResponseSchema, ...agentErrors },
+  },
+  agentVaultAlbumRename: {
+    auth: { kind: "agentKey", scope: "page" }, tags: ["agent"],
+    summary: "Rename a Fansly vault album of a granted page — its own title, not a card's (needs"
+      + " write:publication_drafts and approve:publications or approve:vault_albums). The album by its exact title now"
+      + " or by its id, among the page's albums Hub knows; refused when the title names none or several, the new title"
+      + " is its title already or another album's of the page. No approval: albums are invisible to fans. ONE command"
+      + " on the page's engine, one attempt, never sent again; follow it by its commandId",
+    params: publicationPageParamsSchema,
+    body: agentVaultAlbumRenameBodySchema,
+    response: { 200: agentVaultAlbumRenameResponseSchema, ...agentErrors },
+  },
+  agentVaultAlbumRenameGet: {
+    auth: { kind: "agentKey", scope: "page" }, tags: ["agent"],
+    summary: "Where an agent's rename of a Fansly vault album stands, by its command id (the same rights as the"
+      + " rename). Reads only",
+    params: agentVaultAlbumRenameParamsSchema,
+    response: { 200: agentVaultAlbumRenameResponseSchema, ...agentErrors },
   },
   agentPublicationTargets: {
     auth: { kind: "agentKey", scope: "page" }, tags: ["agent"],

@@ -432,6 +432,7 @@ Followed by Me (16) и Media Purchases (32) Hub не ставит: у 8 и 32 е
 | Добавить в альбом | `POST apiv3…/vault/albums/media` | `{"albumId": "…", "mediaIds": ["…", …]}` | массив `{id, mediaId, mediaType, albumId, accountId, createdAt}`, по записи на каждый `mediaId`, в порядке запроса |
 | Прочитать альбом | `GET apiv3…/media/vaultnew?albumId=…&mediaType=&search=&before=0&after=0` | — | `{albumMedia: [{id, mediaId, albumId, createdAt, customFilename}], media: […]}` |
 | Переименовать карточку | `POST apiv3…/vault/albums/media/rename` | `{albumId, mediaId, customFilename}` | запись альбома с новым `customFilename` |
+| Переименовать альбом | `POST apiv3…/vault/albums/edit` | сайт: альбом целиком `{id, accountId, pos, title, description, type, status, itemCount, lastItemId, version, createdAt}` с новым `title`; хватает `{id, title, description}` | альбом `{id, accountId, pos, title, description, type, status, version, createdAt, lastSyncAt}` с новым `title` |
 
 - Сайт после загрузки сам добавляет файлы в открытый альбом одним запросом (через секунду после последнего).
 - **Порядок.** Альбом показывает записи от последней добавленной к первой (по `id` записи альбома, не по дате
@@ -444,6 +445,23 @@ Followed by Me (16) и Media Purchases (32) Hub не ставит: у 8 и 32 е
 - Hub (0323): вид публикации `vault_album`, шаги `album_create` (если альбома с таким названием у страницы нет) и
   `album_media` — все файлы одобрения одним запросом, последний первым. Новые файлы идут в волт с
   `uploadFormData: null`. Удалить из альбома (`/vault/albums/media/delete`) и удалить альбом Hub не умеет.
+
+**Переименование альбома (проверено живьём 2026-11-27, тестовая модель, `pnpm see:session --bare`).**
+
+- Форма сайта: на странице альбома «⋯» → «Edit Album Details» → окно «Edit Vault Album» (Album Title, Album
+  Description, «Edit»). Ограничения длины форма не ставит (`maxLength` нет); Hub держит свои 120 символов.
+- Сайт шлёт `POST /vault/albums/edit?ngsw-bypass=true` с альбомом целиком, как его отдал список, и новым `title`;
+  заголовки — как у любого запроса сайта (`authorization`, `fansly-client-check`, `-id`, `-ts`, `fansly-session-id`).
+  Ответ 200: альбом с новым названием (`itemCount` и `lastItemId` в ответе нет, есть `lastSyncAt`).
+- Тот же путь с телом `{id, title, description}` и только `authorization` (своя сессия страницы) принят: `pos`,
+  `status` и порядок альбомов не изменились. Без `description` описание стирается (`"hub-test"` → `""`): его надо
+  слать как есть.
+- Тестовый альбом «PPV-900 Тест хаба, удалить» (`971155664292311040`) переименован в PPV-901…PPV-904 и вернут к
+  исходному названию формой сайта; описание снова пустое.
+- Hub (0451): агент переименовывает альбом командой `album_edit` (маршрут `publish.vault_album_edit`) без публикации,
+  как снятие и удаление поста (0369): альбом из известных Hub (список альбомов страницы), описание — как Hub его знает;
+  одна попытка, неизвестный исход не повторяется. Новое название — копия Hub с ответа Fansly до следующего списка
+  альбомов. Строка `/vault/albums/edit` в политике браузера страницы — новая: нужен новый образ браузера.
 
 **Пак в волт (проверено живьём 2026-11-03, тестовая модель, своя сессия страницы).**
 
