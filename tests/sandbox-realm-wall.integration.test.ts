@@ -5,7 +5,9 @@ import argon2 from "argon2";
 import { sql } from "../packages/db/node_modules/drizzle-orm/index.js";
 
 import { routeSchemas } from "@agency_hub_core/contracts";
-import { createFanslyPage, createModel, createOnlyFansPage, insertPersonLogin, insertPersonRow, type Database } from "@agency_hub_core/db";
+import {
+  createFanslyPage, createModel, createOnlyFansPage, insertPersonLogin, insertPersonRow, insertPot, insertPotDistribution, setPotsSwitch, type Database,
+} from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { assignPageToUser, createUserAccount } from "../apps/runtime/src/services/auth.ts";
@@ -690,5 +692,47 @@ describe("the wall of the test realm", () => {
     const ours = await board(ownerCookie);
     expect(ours.leads.map((lead) => lead.model)).not.toContain(SANDBOX_MODEL.name);
     expect(ours.leads.find((lead) => lead.model === "Lana")).toMatchObject({ shoot: "Anton" });
+  }, 300_000);
+
+  // «Общак» on «Сегодня» (`accountPots`): a person's share keeps to its realm by the pot's model, whatever code a line
+  // names: a live pot's line of a test person's code and a test pot's line of a live one reach nobody across the wall.
+  // Last of the file: it switches the pots on.
+  it("a person's own share of the pots keeps to its realm, both ways", async (context) => {
+    if (!server || !testDb) return context.skip();
+    const app = createTestAppContext(testDb);
+    await seedSandbox(app, { scenarios: [], env: SANDBOX_PASSWORDS });
+    const db = app.db as Database;
+    const at = new Date();
+    const day = dayOf(at.getTime());
+    await setPotsSwitch(db, { potsFrom: dayOf(at.getTime() - 3 * DAY_MS), setBy: "test", at });
+    const [liveModel] = (await testDb.pool.query("select id from models where slug = $1", [live.modelSlug])).rows as Array<{ id: string }>;
+    const [testPage] = (await testDb.pool.query("select id, model_id from pages where label = 'test-1'")).rows as Array<{ id: string; model_id: string }>;
+    const pot = (code: string, modelId: number, pageId: number) => insertPot(db, {
+      code, name: code, modelId, pageIds: [pageId], intakeReasons: [], opensOn: dayOf(at.getTime() - 3 * DAY_MS), closesOn: null,
+      participantsMode: "listed", participants: [], formula: { kind: "equal", params: {} }, autoPost: false, createdByUserId: null,
+    }, at);
+    const livePot = await pot("wall-live", Number(liveModel!.id), live.pageId);
+    const testPot = await pot("wall-test", Number(testPage!.model_id), Number(testPage!.id));
+    const split = (potId: number, lines: Array<[string, number]>) => insertPotDistribution(db, {
+      potId, day, formula: { kind: "equal", params: {} }, baseMills: lines.reduce((sum, [, mills]) => sum + mills, 0),
+      lines: lines.map(([personCode, baseMills]) => ({ personCode, baseMills, basis: "поровну на 2" })), parts: [], postedByUserId: null, postedAt: at,
+    });
+    await split(livePot.id, [[live.personCode, 1_111], ["t-chat-1", 2_222]]);
+    await split(testPot.id, [["t-chat-1", 3_333], [live.personCode, 4_444]]);
+
+    const url = `/api/v1/account/pots?from=${day}&to=${day}`;
+    const read = async (username: string, password: string) => {
+      const answer = await server!.inject({ method: "GET", url, headers: { cookie: await login(username, password) } });
+      expect(answer.statusCode, answer.body).toBe(200);
+      return answer;
+    };
+    const liveAnswer = await read("anton", CHATTER_PASSWORD);
+    expect(liveAnswer.json()).toMatchObject({ on: true, totalMills: 1_111, pots: [{ code: "wall-live", mineMills: 1_111 }] });
+    expect((liveAnswer.json() as { pots: unknown[] }).pots).toHaveLength(1);
+    expect(liveAnswer.body).not.toContain("wall-test");
+    const testAnswer = await read("t-chat-1", SANDBOX_PASSWORDS.SANDBOX_PASSWORD_T_CHAT_1);
+    expect(testAnswer.json()).toMatchObject({ on: true, totalMills: 3_333, pots: [{ code: "wall-test", mineMills: 3_333 }] });
+    expect((testAnswer.json() as { pots: unknown[] }).pots).toHaveLength(1);
+    expect(liveWords.filter((word) => testAnswer.body.includes(`"${word}"`))).toEqual([]);
   }, 300_000);
 });

@@ -27,12 +27,13 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 92 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (583)
+## Routes (584)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
 | GET | `/api/v1/account/pay` | `accountPay` | `any-session` | — | — | no |
 | PUT | `/api/v1/account/payout-details` | `accountPayoutDetailsSet` | `any-session` | — | — | no |
+| GET | `/api/v1/account/pots` | `accountPots` | `any-session` | — | — | no |
 | GET | `/api/v1/account/reports` | `accountReports` | `any-session` | — | — | no |
 | GET | `/api/v1/account/shift-numbers` | `accountShiftNumbers` | `any-session` | — | — | no |
 | GET | `/api/v1/account/shifts` | `accountShifts` | `any-session` | — | — | no |

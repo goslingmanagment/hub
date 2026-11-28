@@ -31,6 +31,7 @@ import {
   listMatterPageLabels,
   listOpenMattersOfKinds,
   listPersonRows,
+  listPotAutoPostHeldTransactionIds,
   listPotAutoPostHolds,
   listPotCatalogModelsAndPages,
   listPotDistributions,
@@ -463,6 +464,33 @@ async function computeRealmPotSnapshot(db: Database, realm: "live" | "test"): Pr
     }
   }
   return { potsFrom, pots, statsByPot, routedSalesByPot, unrouted };
+}
+
+/** A pot sale whose base is not (all) distributed yet, where the routing puts it: its open pot, its day, what remains. */
+export interface PendingPotSale {
+  pot: PotRow;
+  transactionId: number;
+  day: string;
+  remainingMills: number;
+}
+
+/**
+ * The realm's base the pots will still post by themselves, sale by sale, from the same snapshot as the owner's
+ * «Общаки»: a sale routed to an open auto-post pot with remaining base > 0, not held against auto-post (an owner's
+ * reversal leaves it to a post by hand, as does a pot without auto-post: no promise to a person there). For a person's
+ * own expected share (`accountPots`, pots-mine.ts). The realm's pots come with it; nothing of the owner's summary.
+ */
+export async function listPendingPotSales(db: Database, realm: "live" | "test"): Promise<{ potsFrom: string | null; pots: PotRow[]; pending: PendingPotSale[] }> {
+  const snapshot = await computeRealmPotSnapshot(db, realm);
+  const candidates: PendingPotSale[] = [];
+  for (const pot of snapshot.pots) {
+    if (pot.state !== "open" || !pot.autoPost) continue;
+    for (const entry of snapshot.routedSalesByPot.get(pot.id) ?? []) {
+      if (entry.remaining > 0) candidates.push({ pot, transactionId: entry.sale.transactionId, day: entry.sale.day, remainingMills: entry.remaining });
+    }
+  }
+  const held = await listPotAutoPostHeldTransactionIds(db, candidates.map((sale) => sale.transactionId));
+  return { potsFrom: snapshot.potsFrom, pots: snapshot.pots, pending: candidates.filter((sale) => !held.has(sale.transactionId)) };
 }
 
 /** Keeps the single aggregate `pot.unrouted:open` health matter in sync for the live realm (no per-sale matters). */

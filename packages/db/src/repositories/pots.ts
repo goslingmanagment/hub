@@ -138,6 +138,14 @@ export async function clearPotAutoPostHold(db: Database, transactionId: number, 
   await db.execute(sql`delete from pot_auto_post_holds where transaction_id = ${transactionId} and pot_id = ${potId}`);
 }
 
+/** Which of these sales are held against auto-post (an owner's reversal): their base waits for a post by hand. */
+export async function listPotAutoPostHeldTransactionIds(db: Database, transactionIds: readonly number[]): Promise<Set<number>> {
+  if (transactionIds.length === 0) return new Set();
+  const result = await db.execute<Row>(sql`
+    select distinct transaction_id from pot_auto_post_holds where transaction_id = any(${ids(transactionIds)})`);
+  return new Set(result.rows.map((row) => num(row.transaction_id)));
+}
+
 // ── Pots (`pots`) ────────────────────────────────────────────────────────────
 
 export type PotIntakeReason = "post_tip" | "campaign";
@@ -516,6 +524,55 @@ export async function summarizeActiveDistributionsByPot(
     num(row.pot_id),
     { postedBaseMills: num(row.posted_base_mills), distributionsCount: num(row.dist_count) },
   ]));
+}
+
+/** One person's own line of a non-reversed distribution (`accountPots`): nothing of the other lines but their count. */
+export interface OwnPotLineRow {
+  distributionId: number;
+  potId: number;
+  potCode: string;
+  potName: string;
+  potPageIds: number[];
+  day: string;
+  baseMills: number;
+  /** How many lines the distribution has (among how many it was split); never whose they are. */
+  splitCount: number;
+  /** How the distribution was split (its formula's kind: an equal pot's distribution may be posted by hand). */
+  formulaKind: PotFormulaKind;
+}
+
+/**
+ * A person's own lines (`lines[].personCode`) of the non-reversed distributions of pots of `realm` (by the pot's model)
+ * whose day is in `[from, to]`, oldest first.
+ */
+export async function listOwnPotLines(
+  db: Database,
+  input: { personCode: string; from: string; to: string; realm: "live" | "test" },
+): Promise<OwnPotLineRow[]> {
+  const result = await db.execute<Row>(sql`
+    select d.id as distribution_id, d.pot_id, p.code as pot_code, p.name as pot_name, p.page_ids as pot_page_ids,
+      to_char(d.day, 'YYYY-MM-DD') as day, (line ->> 'baseMills')::bigint as base_mills,
+      jsonb_array_length(d.lines) as split_count, d.formula ->> 'kind' as formula_kind
+    from pot_distributions d
+    join pots p on p.id = d.pot_id
+    join models m on m.id = p.model_id
+    cross join lateral jsonb_array_elements(d.lines) as line
+    where d.reversed_at is null
+      and d.day >= ${input.from}::date and d.day <= ${input.to}::date
+      and m.is_test = ${input.realm === "test"}
+      and line ->> 'personCode' = ${input.personCode}
+    order by d.day asc, d.id asc`);
+  return result.rows.map((row) => ({
+    distributionId: num(row.distribution_id),
+    potId: num(row.pot_id),
+    potCode: String(row.pot_code),
+    potName: String(row.pot_name),
+    potPageIds: numArray(row.pot_page_ids),
+    day: String(row.day),
+    baseMills: num(row.base_mills),
+    splitCount: num(row.split_count),
+    formulaKind: String(row.formula_kind) as PotFormulaKind,
+  }));
 }
 
 // ── Eligible `sale_homes` reads & day-reconciliation reads ───────────────────

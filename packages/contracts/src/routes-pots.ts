@@ -1,7 +1,8 @@
 /**
  * Workboard pots (0443, H11): owner pot management, pure distribution preview, immutable posted distributions,
- * reversals, unrouted pot sales, legacy ledger pots archive, and the K2 feed
- * (`GET /api/v1/agent/pot-distributions/feed`, `read:money`) for the agency ledger.
+ * reversals, unrouted pot sales, legacy ledger pots archive, the K2 feed
+ * (`GET /api/v1/agent/pot-distributions/feed`, `read:money`) for the agency ledger, and a person's own share
+ * (`GET /api/v1/account/pots`, any session: their own lines and expected share, never a colleague's, never pay).
  */
 import { z } from "zod";
 
@@ -302,8 +303,56 @@ export const agentPotDistributionsFeedResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+// ── The person's own share (`GET /api/v1/account/pots`, Workboard «Сегодня») ──
+
+/** The widest window: the same as «Мои деньги» (`accountPay`). */
+export const ACCOUNT_POTS_MAX_DAYS = 61;
+
+export const accountPotsQuerySchema = z.object({
+  /** Moscow days (a distribution's day: its sale's day), both included. */
+  from: businessDate,
+  to: businessDate,
+});
+
+/** One pot the caller has a share in: their own lines only, never anyone else's code, base or count of lines. */
+export const accountPotSchema = z.object({
+  code: z.string(),
+  name: z.string(),
+  pageLabels: z.array(z.string()),
+  /** The caller's own lines of the window's non-reversed distributions, added up (base, not pay). */
+  mineMills: mills,
+  /** How many of the window's distributions carry a line of the caller. */
+  distributions: z.number().int().nonnegative(),
+  /** Among how many the caller's latest distribution of the window was split; null — none in the window. */
+  lastSplit: z.number().int().positive().nullable(),
+  /** How the caller's latest distribution of the window was split (its formula's kind); null — none in the window. */
+  lastFormula: z.enum(POT_FORMULA_KINDS).nullable(),
+  /** The caller's expected line of the pot's base not distributed yet (any day since `potsFrom`). */
+  pendingMills: mills,
+  /** The caller is among the pot's participants today (Moscow). */
+  participantToday: z.boolean(),
+});
+
+export const accountPotsResponseSchema = z.object({
+  /** Pots live in Workboard for the window: `potsFrom` is set and not after `to`. */
+  on: z.boolean(),
+  potsFrom: businessDate.nullable(),
+  from: businessDate,
+  to: businessDate,
+  /** The pots' `mineMills` added up. */
+  totalMills: mills,
+  /** The pots' `pendingMills` added up. */
+  pendingMills: mills,
+  /** Only pots with a line of the caller in the window, a pending share, or the caller among today's participants. */
+  pots: z.array(accountPotSchema),
+  serverNow: isoTimestamp,
+});
+
 // ── Exported types ───────────────────────────────────────────────────────────
 
+export type AccountPotsQuery = z.infer<typeof accountPotsQuerySchema>;
+export type AccountPot = z.infer<typeof accountPotSchema>;
+export type AccountPotsResponse = z.infer<typeof accountPotsResponseSchema>;
 export type PotFormula = z.infer<typeof potFormulaSchema>;
 export type PotParticipantPeriod = z.infer<typeof potParticipantPeriodSchema>;
 export type PotDistributionLine = z.infer<typeof potDistributionLineSchema>;
@@ -405,6 +454,22 @@ export const potsRouteSchemas = {
     params: potDistributionIdParamsSchema,
     body: potDistributionReverseBodySchema,
     response: { 200: potDistributionReverseResponseSchema, ...ownerErrors },
+  },
+  accountPots: {
+    auth: { kind: "any-session" },
+    tags: ["client"],
+    summary: "The caller's own share of the pots: their lines of the window's distributions and their expected share of the base not distributed yet",
+    description: "Workboard «Сегодня»; read-only, database only. The person is the session user's, found through the people "
+      + "registry; the query names only the window (Moscow days, at most 61). Base mills (the share of a pot's sales "
+      + "counted into the person's sales), never pay, rates or terms; never a colleague's code, line or base. A login "
+      + "that is nobody's — `on` as the switch says, no pots.",
+    querystring: accountPotsQuerySchema,
+    response: {
+      200: accountPotsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
   },
   agentPotDistributionsFeed: {
     auth: { kind: "agentKey" },
