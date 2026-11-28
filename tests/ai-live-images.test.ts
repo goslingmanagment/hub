@@ -18,8 +18,8 @@ import {
 import { buildAnthropicGatewayStreamRequest } from "../apps/runtime/src/services/ai-gateway-anthropic.ts";
 
 // chat-extension live images: the fan's newest photos ride with one
-// generation as images. The labels name them, a refused photo stays out, and
-// the bytes reach the provider after every text block.
+// generation as images. The labels name them, background describer refusals do
+// not suppress live attachments, and the bytes reach the provider after every text block.
 
 vi.mock("../apps/runtime/src/services/effective-config.ts", () => ({
   loadEffectiveConfig: async () => ({ aiLiveImagesEnabled: true }),
@@ -54,7 +54,7 @@ const image = (mediaId: string, minute: number, data: string) => ({
 });
 
 describe("live images", () => {
-  it("numbers the photos oldest first and leaves out a refused or unreadable one", async () => {
+  it("numbers the photos oldest first, keeps describer-refused photos, and leaves out unreadable ones", async () => {
     const photo = await jpeg(1600, 1200);
     const { attachments, manifest } = await prepareLiveImages(app(["66"]), {
       pageId: 1,
@@ -66,10 +66,10 @@ describe("live images", () => {
         image("44", 4, Buffer.from("not an image").toString("base64")),
       ],
     });
-    expect(attachments.map((item) => [item.n, item.mediaId])).toEqual([[1, "55"], [2, "77"]]);
+    expect(attachments.map((item) => [item.n, item.mediaId])).toEqual([[1, "55"], [2, "66"], [3, "77"]]);
     // Re-encoded within the describer's bounds.
     expect(attachments[0]!.image).toMatchObject({ mediaType: "image/jpeg", width: 1024, height: 768 });
-    expect(manifest).toMatchObject({ received: 4, attached: 2, refused: 1, unreadable: 1 });
+    expect(manifest).toMatchObject({ received: 4, attached: 3, refused: 0, unreadable: 1 });
   });
 
   it("names an attached photo in its label and the rest by time", async () => {
