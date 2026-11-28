@@ -707,6 +707,21 @@
                               }
                             ]
                           },
+                          "lastFormula": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "equal",
+                                  "weights",
+                                  "manual"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "pendingMills": {
                             "type": "integer",
                             "minimum": -9007199254740991,
@@ -723,6 +738,7 @@
                           "mineMills",
                           "distributions",
                           "lastSplit",
+                          "lastFormula",
                           "pendingMills",
                           "participantToday"
                         ],

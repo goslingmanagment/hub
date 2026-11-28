@@ -12,17 +12,24 @@ import "../my-shifts/my-money.css";
  * answer. Each pot (page, sum, the split) only in the hint.
  */
 
+/** How the caller's latest distribution of a pot was split, in the words of its line («поровну на 3», «вручную»). */
+function splitWords(pot: AccountPot): string | null {
+  if (pot.lastFormula === "equal") return pot.lastSplit === null ? "поровну" : `поровну на ${pot.lastSplit}`;
+  if (pot.lastFormula === "weights") return "по весам";
+  if (pot.lastFormula === "manual") return "вручную";
+  return null;
+}
+
 /** A pot a line under the hint's one line of what it is: its pages, the sum, and how the latest was split. */
 function PotLines({ pots, mills, split }: { pots: readonly AccountPot[]; mills: (pot: AccountPot) => number; split: boolean }) {
   const shown = pots.filter((pot) => mills(pot) > 0);
   if (shown.length === 0) return null;
   return (
     <ul className="today-pots">
-      {shown.map((pot) => (
-        <li key={pot.code}>
-          {[pot.pageLabels.join(", "), formatMills(mills(pot)), ...(split && pot.lastSplit !== null ? [`поровну на ${pot.lastSplit}`] : [])].join(" · ")}
-        </li>
-      ))}
+      {shown.map((pot) => {
+        const how = split ? splitWords(pot) : null;
+        return <li key={pot.code}>{[pot.pageLabels.join(", "), formatMills(mills(pot)), ...(how === null ? [] : [how])].join(" · ")}</li>;
+      })}
     </ul>
   );
 }

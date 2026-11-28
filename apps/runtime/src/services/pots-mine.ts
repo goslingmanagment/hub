@@ -6,6 +6,7 @@ import {
   listMatterPageLabels,
   listOwnPotLines,
   readPotsSwitch,
+  type PotFormulaKind,
   type PotRow,
 } from "@agency_hub_core/db";
 
@@ -67,12 +68,12 @@ export async function readAccountPots(
     ...await contextOf(day), day, mode: pot.participantsMode, pageIds: pot.pageIds, listed: pot.participants,
   });
 
-  interface Mine { code: string; name: string; pageIds: readonly number[]; mine: number; count: number; lastSplit: number | null; pending: number; today: boolean }
+  interface Mine { code: string; name: string; pageIds: readonly number[]; mine: number; count: number; lastSplit: number | null; lastFormula: PotFormulaKind | null; pending: number; today: boolean }
   const byPot = new Map<number, Mine>();
   const mineOf = (potId: number, pot: { code: string; name: string; pageIds: readonly number[] }) => {
     let entry = byPot.get(potId);
     if (entry === undefined) {
-      entry = { code: pot.code, name: pot.name, pageIds: pot.pageIds, mine: 0, count: 0, lastSplit: null, pending: 0, today: false };
+      entry = { code: pot.code, name: pot.name, pageIds: pot.pageIds, mine: 0, count: 0, lastSplit: null, lastFormula: null, pending: 0, today: false };
       byPot.set(potId, entry);
     }
     return entry;
@@ -84,6 +85,7 @@ export async function readAccountPots(
     entry.mine += line.baseMills;
     entry.count += 1;
     entry.lastSplit = line.splitCount;
+    entry.lastFormula = line.formulaKind;
   }
 
   // What is still to come: the person's line of each pending sale, by the pot's formula among the sale day's
@@ -116,6 +118,7 @@ export async function readAccountPots(
       mineMills: entry.mine,
       distributions: entry.count,
       lastSplit: entry.lastSplit,
+      lastFormula: entry.lastFormula,
       pendingMills: entry.pending,
       participantToday: entry.today,
     }));

@@ -132,7 +132,7 @@ describe("a person's own share of the pots (accountPots)", () => {
     expect(alex.pots).toEqual([{
       code: "pot-mia-1", name: "Pot mia-1", pageLabels: ["mia-1"],
       // 2026-11-21 and 2026-11-24; the reversed 2026-11-22 and the days outside the window are not in it.
-      mineMills: 12_001, distributions: 2, lastSplit: 1,
+      mineMills: 12_001, distributions: 2, lastSplit: 1, lastFormula: "equal",
       // The reversed sale's 3_000 split as on its day (alex and kate), not as today (alex alone).
       pendingMills: 1_500, participantToday: true,
     }]);
@@ -144,8 +144,8 @@ describe("a person's own share of the pots (accountPots)", () => {
     expect(kate).toMatchObject({ totalMills: 5_000, pendingMills: 5_500 });
     expect(kate.pots).toEqual([
       // Her period ended on 2026-11-23: a share of what she worked, not a participant today.
-      { code: "pot-mia-1", name: "Pot mia-1", pageLabels: ["mia-1"], mineMills: 5_000, distributions: 1, lastSplit: 2, pendingMills: 1_500, participantToday: false },
-      { code: "pot-mia-2", name: "Pot mia-2", pageLabels: ["mia-2"], mineMills: 0, distributions: 0, lastSplit: null, pendingMills: 4_000, participantToday: true },
+      { code: "pot-mia-1", name: "Pot mia-1", pageLabels: ["mia-1"], mineMills: 5_000, distributions: 1, lastSplit: 2, lastFormula: "equal", pendingMills: 1_500, participantToday: false },
+      { code: "pot-mia-2", name: "Pot mia-2", pageLabels: ["mia-2"], mineMills: 0, distributions: 0, lastSplit: null, lastFormula: null, pendingMills: 4_000, participantToday: true },
     ]);
     expect(JSON.stringify(kate)).not.toContain("alex");
   }, INTEGRATION_TEST_TIMEOUT_MS);

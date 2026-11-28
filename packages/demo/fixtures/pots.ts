@@ -299,6 +299,7 @@ function accountPots(request: DemoRequest): KernelOperationResponse<"accountPots
       mineMills: lines.reduce((sum, line) => sum + line.baseMills, 0),
       distributions: lines.length,
       lastSplit: lines.at(-1)?.split ?? null,
+      lastFormula: lines.length > 0 ? "equal" as const : null,
       pendingMills: share.pendingMills,
       participantToday: true,
     };

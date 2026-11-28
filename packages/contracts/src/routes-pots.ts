@@ -325,6 +325,8 @@ export const accountPotSchema = z.object({
   distributions: z.number().int().nonnegative(),
   /** Among how many the caller's latest distribution of the window was split; null — none in the window. */
   lastSplit: z.number().int().positive().nullable(),
+  /** How the caller's latest distribution of the window was split (its formula's kind); null — none in the window. */
+  lastFormula: z.enum(POT_FORMULA_KINDS).nullable(),
   /** The caller's expected line of the pot's base not distributed yet (any day since `potsFrom`). */
   pendingMills: mills,
   /** The caller is among the pot's participants today (Moscow). */

@@ -164,14 +164,17 @@ function Week({ rows, loading }: { rows: readonly MyShiftRow[] | undefined; load
   );
 }
 
-/** The person's own day. A leader with no shift of their own this week sees none of it (their «Ждут вас» is «Решить»). */
+/**
+ * The person's own day. A leader with no shift of their own this week sees none of it (their «Ждут вас» is «Решить»)
+ * but «Общак»: a pot's participants are its page's workers, shifts or not.
+ */
 export function OwnToday({ leader }: { leader: boolean }) {
   const shifts = useTodayShifts();
   const today = useToday();
   const rows = shifts.data ? rowsOf(shifts.data.rows) : undefined;
   const works = (rows ?? []).some((row) => row.shift !== null);
-  if (leader && !works) return null;
   const week = { from: addDays(moscowToday(), -(WEEK_DAYS - 1)), to: moscowToday() };
+  if (leader && !works) return <div className="today-grid"><div className="today-money"><MyPotsBlock window={week} /></div></div>;
   return (
     <div className="today-grid">
       {leader && <h2 className="today-part">Ваши смены</h2>}

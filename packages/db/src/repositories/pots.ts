@@ -529,6 +529,8 @@ export interface OwnPotLineRow {
   baseMills: number;
   /** How many lines the distribution has (among how many it was split); never whose they are. */
   splitCount: number;
+  /** How the distribution was split (its formula's kind: an equal pot's distribution may be posted by hand). */
+  formulaKind: PotFormulaKind;
 }
 
 /**
@@ -542,7 +544,7 @@ export async function listOwnPotLines(
   const result = await db.execute<Row>(sql`
     select d.id as distribution_id, d.pot_id, p.code as pot_code, p.name as pot_name, p.page_ids as pot_page_ids,
       to_char(d.day, 'YYYY-MM-DD') as day, (line ->> 'baseMills')::bigint as base_mills,
-      jsonb_array_length(d.lines) as split_count
+      jsonb_array_length(d.lines) as split_count, d.formula ->> 'kind' as formula_kind
     from pot_distributions d
     join pots p on p.id = d.pot_id
     join models m on m.id = p.model_id
@@ -561,6 +563,7 @@ export async function listOwnPotLines(
     day: String(row.day),
     baseMills: num(row.base_mills),
     splitCount: num(row.split_count),
+    formulaKind: String(row.formula_kind) as PotFormulaKind,
   }));
 }
 
