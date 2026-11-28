@@ -6,6 +6,7 @@ export const kernelOperations = {
   accountChatterStats: { method: "GET", path: "/api/v1/account/stats" },
   accountPay: { method: "GET", path: "/api/v1/account/pay" },
   accountPayoutDetailsSet: { method: "PUT", path: "/api/v1/account/payout-details" },
+  accountPots: { method: "GET", path: "/api/v1/account/pots" },
   accountReports: { method: "GET", path: "/api/v1/account/reports" },
   accountShiftNumbers: { method: "GET", path: "/api/v1/account/shift-numbers" },
   accountShifts: { method: "GET", path: "/api/v1/account/shifts" },

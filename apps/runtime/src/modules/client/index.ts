@@ -24,6 +24,7 @@ import { registerChatterStatsRoutes } from "./chatter-stats.ts";
 import { registerAccountReportsRoutes } from "./account-reports.ts";
 import { registerWorkboardTodayRoutes } from "./workboard-today.ts";
 import { registerAccountPayRoutes } from "./account-pay.ts";
+import { registerAccountPotsRoutes } from "./account-pots.ts";
 import { registerShiftReportNotesRoutes } from "./shift-report-notes.ts";
 import { registerTeamSalesRoutes } from "./team-sales.ts";
 import { registerClientWinBackRoutes } from "./win-back.ts";
@@ -83,6 +84,7 @@ export function registerClientRoutes(server: ApiServer, ctx: ApiModuleContext) {
   registerAccountReportsRoutes(server, ctx);
   registerWorkboardTodayRoutes(server, ctx);
   registerAccountPayRoutes(server, ctx);
+  registerAccountPotsRoutes(server, ctx);
   registerShiftReportNotesRoutes(server, ctx);
   registerTeamSalesRoutes(server, ctx);
   registerClientHandoffRoutes(server, ctx);

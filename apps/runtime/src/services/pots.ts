@@ -465,6 +465,30 @@ async function computeRealmPotSnapshot(db: Database, realm: "live" | "test"): Pr
   return { potsFrom, pots, statsByPot, routedSalesByPot, unrouted };
 }
 
+/** A pot sale whose base is not (all) distributed yet, where the routing puts it: its open pot, its day, what remains. */
+export interface PendingPotSale {
+  pot: PotRow;
+  transactionId: number;
+  day: string;
+  remainingMills: number;
+}
+
+/**
+ * The realm's base still to distribute, sale by sale, from the same snapshot as the owner's «Общаки» (a sale routed
+ * to an open pot with remaining base > 0): for a person's own expected share (`accountPots`, pots-mine.ts). The
+ * realm's pots come with it; nothing of the owner's summary.
+ */
+export async function listPendingPotSales(db: Database, realm: "live" | "test"): Promise<{ potsFrom: string | null; pots: PotRow[]; pending: PendingPotSale[] }> {
+  const snapshot = await computeRealmPotSnapshot(db, realm);
+  const pending: PendingPotSale[] = [];
+  for (const pot of snapshot.pots) {
+    for (const entry of snapshot.routedSalesByPot.get(pot.id) ?? []) {
+      if (entry.remaining > 0) pending.push({ pot, transactionId: entry.sale.transactionId, day: entry.sale.day, remainingMills: entry.remaining });
+    }
+  }
+  return { potsFrom: snapshot.potsFrom, pots: snapshot.pots, pending };
+}
+
 /** Keeps the single aggregate `pot.unrouted:open` health matter in sync for the live realm (no per-sale matters). */
 export async function syncUnroutedPotMatter(db: Database, now: Date): Promise<number> {
   const snapshot = await computeRealmPotSnapshot(db, "live");

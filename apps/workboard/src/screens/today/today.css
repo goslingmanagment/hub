@@ -261,6 +261,14 @@
     display: none;
   }
 
+  /* «Общак»'s hint: a pot a line, under the one line of what it is. */
+  .today-pots {
+    margin: var(--ui-space-2) 0 0;
+    padding: 0;
+    list-style: none;
+    font-variant-numeric: tabular-nums;
+  }
+
   .today-week__facts {
     margin-bottom: var(--ui-space-2);
   }

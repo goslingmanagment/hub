@@ -13,6 +13,7 @@ import { PeriodQualityLine } from "../my-shifts/MyQuality";
 import { rowsOf, type MyShiftRow } from "../my-shifts/model";
 import { MyMatters } from "../waiting/MyMatters";
 import { WEEK_DAYS, useToday, useTodayNumbers, useTodayShifts } from "./data";
+import { MyPotsBlock } from "./MyPots";
 // The quality line's look (`mys-quality`) is «Мои смены»'s own.
 import "../my-shifts/my-shifts.css";
 
@@ -21,7 +22,7 @@ import "../my-shifts/my-shifts.css";
  * next shift on the person's pages, the customs to give), «Моя смена» (the one going on or the last: hours, the sales by
  * the rule and the report's number — two named numbers — and its report), «Ждут вас» (the first lines), «Неделя» (the
  * person's own numbers, the team's average beside the quality ones; never a list of people, never pay), «Мои деньги»
- * (only with the person's switch).
+ * (only with the person's switch), «Общак» (the person's own share of the pots, for everyone: base, never pay).
  */
 
 type Today = KernelOperationResponse<"workboardToday">;
@@ -179,6 +180,7 @@ export function OwnToday({ leader }: { leader: boolean }) {
       {!leader && <div className="today-card"><MyMatters /></div>}
       <Week rows={rows} loading={shifts.isPending} />
       <div className="today-money"><MyMoneyBlock window={week} /></div>
+      <div className="today-money"><MyPotsBlock window={week} /></div>
     </div>
   );
 }

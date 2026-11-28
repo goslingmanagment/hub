@@ -10,8 +10,8 @@ import type {
 
 import { millsFromDollars, millsFromInteger, millsToNumber } from "@agency_hub_core/shared";
 
-import { demoError, type DemoHandlers } from "../core.ts";
-import { DEMO_DATA_PAGES, DEMO_MODELS, DEMO_USERS } from "../world.ts";
+import { demoError, queryString, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
+import { DEMO_DATA_PAGES, DEMO_MODELS, DEMO_USERS, demoUserByRole } from "../world.ts";
 
 /**
  * Workboard pots (0443, H11) in the demo, kept in memory until restart.
@@ -268,7 +268,52 @@ function computeDemoLines(baseMills: number, formula: PotFormula, participants: 
   }));
 }
 
+const DAY_MS = 86_400_000;
+const BUSINESS_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * «Из общака» on «Сегодня» (`accountPots`): the demo person's own lines of the window, invented by days back from `to`
+ * on the page pots of their first two pages; the second pot also has a share still to come. The owner has none.
+ */
+const DEMO_OWN_SHARES: ReadonlyArray<{ lines: ReadonlyArray<{ back: number; baseMills: number; split: number }>; pendingMills: number }> = [
+  { lines: [{ back: 5, baseMills: 6_500, split: 3 }, { back: 3, baseMills: 21_660, split: 3 }, { back: 1, baseMills: 9_000, split: 2 }, { back: 0, baseMills: 14_250, split: 3 }], pendingMills: 0 },
+  { lines: [{ back: 4, baseMills: 12_000, split: 2 }, { back: 2, baseMills: 7_800, split: 2 }], pendingMills: 5_250 },
+];
+
+function accountPots(request: DemoRequest): KernelOperationResponse<"accountPots"> | DemoReply {
+  const from = queryString(request, "from") ?? "";
+  const to = queryString(request, "to") ?? "";
+  if (!BUSINESS_DATE.test(from) || !BUSINESS_DATE.test(to) || to < from) return demoError(400, "Bad Request", "from и to — даты YYYY-MM-DD.");
+  if ((Date.parse(to) - Date.parse(from)) / DAY_MS + 1 > 61) return demoError(400, "Bad Request", "At most 61 days");
+  const dayBack = (back: number) => new Date(Date.parse(`${to}T00:00:00Z`) - back * DAY_MS).toISOString().slice(0, 10);
+  const answer = { on: true, potsFrom: dayBack(20), from, to, totalMills: 0, pendingMills: 0, pots: [], serverNow: request.now.toISOString() };
+  if (request.role === "owner") return answer;
+  const pages = demoUserByRole(request.role).pages.slice(0, DEMO_OWN_SHARES.length);
+  const pots = pages.map((label, index) => {
+    const share = DEMO_OWN_SHARES[index]!;
+    const lines = share.lines.filter((line) => dayBack(line.back) >= from);
+    return {
+      code: `page-${label}`,
+      name: `Общак ${label}`,
+      pageLabels: [label],
+      mineMills: lines.reduce((sum, line) => sum + line.baseMills, 0),
+      distributions: lines.length,
+      lastSplit: lines.at(-1)?.split ?? null,
+      pendingMills: share.pendingMills,
+      participantToday: true,
+    };
+  });
+  return {
+    ...answer,
+    totalMills: pots.reduce((sum, pot) => sum + pot.mineMills, 0),
+    pendingMills: pots.reduce((sum, pot) => sum + pot.pendingMills, 0),
+    pots,
+  };
+}
+
 export const potsHandlers: DemoHandlers = {
+  accountPots,
+
   potsList: ({ now }): KernelOperationResponse<"potsList"> => ({
     potsFrom: "2026-12-01",
     pots: demoPots.map(summarizePot),
