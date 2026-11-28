@@ -143,7 +143,7 @@ the owner's machine (outside this repository); a change that moves a home or add
   a pot checks coverage against the ledger and writes no Hub distribution; `pots:from` switches the cutover day
   (`--off` refused once any active distribution exists). A person reads only their own share (`accountPots`,
   `services/pots-mine.ts`, any session, the narrow one too): their own lines' base mills and their expected line of the
-  base not distributed yet; never a colleague's code or line, never pay.
+  base an auto-post pot will still post (not held); never a colleague's code or line, never pay.
 - **People's pay**: the ledger's. Hub only reads it (`ledgerGet`: a person's days, the payout calculation, checks,
   report days, the month card) and shows it; `payMillsOf` (`services/ledger-payouts.ts`) is the one conversion. Workboard
   pots hold and emit distribution base in mills while the ledger still computes pay from it. No pay number is computed in

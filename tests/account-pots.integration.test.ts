@@ -54,10 +54,10 @@ async function insertPostTip(pageId: number, occurredAt: Date, netMills: number)
   return Number(res.rows[0].id);
 }
 
-/** A sale on a Moscow day at noon, its day refreshed (the pots reconciled) at the end of it. */
-async function sale(pageId: number, day: string, netMills: number) {
+/** A sale on a Moscow day at noon, its day refreshed (the pots reconciled, unless deferred) at the end of it. */
+async function sale(pageId: number, day: string, netMills: number, options: { deferPots?: boolean } = {}) {
   const id = await insertPostTip(pageId, msk(`${day} 12:00`), netMills);
-  await refreshSaleHomesForDay(app.db, day, msk(`${day} 20:00`));
+  await refreshSaleHomesForDay(app.db, day, msk(`${day} 20:00`), options);
   return id;
 }
 
@@ -107,9 +107,10 @@ describe("a person's own share of the pots (accountPots)", () => {
 
     await sale(pages.one, "2026-11-19", 9_000); // before the window
     await sale(pages.one, "2026-11-21", 10_001); // alex 5_001, kate 5_000
-    await sale(pages.one, "2026-11-22", 3_000); // posted, then reversed: still to come
+    await sale(pages.one, "2026-11-22", 3_000); // posted, then reversed by the owner: held, not to come by itself
+    await sale(pages.one, "2026-11-23", 3_000, { deferPots: true }); // not reconciled yet: still to come
     await sale(pages.one, "2026-11-24", 7_000); // alex alone (kate's period ended)
-    await sale(pages.two, "2026-11-25", 4_000); // the manual pot: still to come, kate's
+    await sale(pages.two, "2026-11-25", 4_000); // the pot without auto-post: the owner's to post, no promise
     await sale(pages.one, "2026-11-27", 2_000); // after the window
 
     const potOne = (await testDb.pool.query("select id from pots where code = 'pot-mia-1'")).rows[0] as { id: string };
@@ -133,7 +134,8 @@ describe("a person's own share of the pots (accountPots)", () => {
       code: "pot-mia-1", name: "Pot mia-1", pageLabels: ["mia-1"],
       // 2026-11-21 and 2026-11-24; the reversed 2026-11-22 and the days outside the window are not in it.
       mineMills: 12_001, distributions: 2, lastSplit: 1, lastFormula: "equal",
-      // The reversed sale's 3_000 split as on its day (alex and kate), not as today (alex alone).
+      // The unreconciled 2026-11-23 sale's 3_000 split as on its day (alex and kate), not as today (alex alone); the
+      // reversed (held) 2026-11-22 sale is not to come.
       pendingMills: 1_500, participantToday: true,
     }]);
     // Nothing of kate: not her code, not her lines, not the manual pot she alone is in.
@@ -141,11 +143,12 @@ describe("a person's own share of the pots (accountPots)", () => {
     expect(JSON.stringify(alex)).not.toContain("pot-mia-2");
 
     const kate = await potsOf(users.kate);
-    expect(kate).toMatchObject({ totalMills: 5_000, pendingMills: 5_500 });
+    expect(kate).toMatchObject({ totalMills: 5_000, pendingMills: 1_500 });
     expect(kate.pots).toEqual([
       // Her period ended on 2026-11-23: a share of what she worked, not a participant today.
       { code: "pot-mia-1", name: "Pot mia-1", pageLabels: ["mia-1"], mineMills: 5_000, distributions: 1, lastSplit: 2, lastFormula: "equal", pendingMills: 1_500, participantToday: false },
-      { code: "pot-mia-2", name: "Pot mia-2", pageLabels: ["mia-2"], mineMills: 0, distributions: 0, lastSplit: null, lastFormula: null, pendingMills: 4_000, participantToday: true },
+      // The pot without auto-post: a participant today, nothing promised before the owner posts.
+      { code: "pot-mia-2", name: "Pot mia-2", pageLabels: ["mia-2"], mineMills: 0, distributions: 0, lastSplit: null, lastFormula: null, pendingMills: 0, participantToday: true },
     ]);
     expect(JSON.stringify(kate)).not.toContain("alex");
   }, INTEGRATION_TEST_TIMEOUT_MS);

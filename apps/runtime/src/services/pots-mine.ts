@@ -88,8 +88,8 @@ export async function readAccountPots(
     entry.lastFormula = line.formulaKind;
   }
 
-  // What is still to come: the person's line of each pending sale, by the pot's formula among the sale day's
-  // participants (an auto-posted pot splits equally). A manual formula's shares are the owner's to write: no estimate.
+  // What is still to come: the person's line of each sale an auto-post pot will still post (not held), by the pot's
+  // formula (equal: auto-post requires it) among the sale day's participants, as reconcilePotsOfDay will split it.
   for (const sale of pending.pending) {
     if (sale.pot.formula.kind === "manual") continue;
     const participants = await participantsOf(sale.pot, sale.day);

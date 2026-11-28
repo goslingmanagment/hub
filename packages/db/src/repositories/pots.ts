@@ -138,6 +138,14 @@ export async function clearPotAutoPostHold(db: Database, transactionId: number, 
   await db.execute(sql`delete from pot_auto_post_holds where transaction_id = ${transactionId} and pot_id = ${potId}`);
 }
 
+/** Which of these sales are held against auto-post (an owner's reversal): their base waits for a post by hand. */
+export async function listPotAutoPostHeldTransactionIds(db: Database, transactionIds: readonly number[]): Promise<Set<number>> {
+  if (transactionIds.length === 0) return new Set();
+  const result = await db.execute<Row>(sql`
+    select distinct transaction_id from pot_auto_post_holds where transaction_id = any(${ids(transactionIds)})`);
+  return new Set(result.rows.map((row) => num(row.transaction_id)));
+}
+
 // ── Pots (`pots`) ────────────────────────────────────────────────────────────
 
 export type PotIntakeReason = "post_tip" | "campaign";
