@@ -128,8 +128,12 @@ describe("media describer response classification", () => {
     expect(classifyMediaDescribeResponse(MODEL, response)).toMatchObject({ kind: "refused", reason });
   });
 
-  it("keeps descriptions that merely start with I-words", () => {
-    for (const text of ["Image of a sunset over the sea.", "Icons of three apps on a phone screen."]) {
+  it("keeps descriptions that merely start with I-words or a non-refusal apology", () => {
+    for (const text of [
+      "Image of a sunset over the sea.",
+      "Icons of three apps on a phone screen.",
+      "Sorry, this photo is too dark and blurry to make out details.",
+    ]) {
       expect(classifyMediaDescribeResponse(MODEL, message({ content: [{ type: "text", text }] }))).toMatchObject({ kind: "described" });
     }
   });

@@ -149,7 +149,7 @@ export type MediaDescribeOutcome =
   | { kind: "failed"; errorCode: string; httpStatus: number | null };
 
 const WHITESPACE = /\s+/g;
-const DECLINED_TEXT = /^(?:sorry\b|i\s*(?:can(?:no|'|’)?t|am\s+(?:not\s+able|unable)|'m\s+(?:not\s+able|unable)|won(?:'|’)t|will\s+not)\b)/i;
+const DECLINED_TEXT = /^(?:(?:sorry\b[^.!\n]{0,40}\b)?i\s*(?:can(?:no|'|’)?t|am\s+(?:not\s+able|unable)|'m\s+(?:not\s+able|unable)|won(?:'|’)t|will\s+not)\b)/i;
 
 /** Collapse whitespace and clamp to the stored bound on a word boundary. */
 export function normalizeMediaDescription(raw: string) {

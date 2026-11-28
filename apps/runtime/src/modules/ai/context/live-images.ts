@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { listAiMediaDescriptionsByRefs, type AiMediaPlatform } from "@agency_hub_core/db";
+import type { AiMediaPlatform } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../../bootstrap.ts";
 import type { AiGatewayInlineImage } from "../../../services/ai-gateway-anthropic.ts";
@@ -16,9 +16,9 @@ import { attachedImageNote, type MediaNoteItem, type MediaNotesManifest } from "
 // looks at the photo itself and not at a caption made without the
 // conversation. The client re-encodes them (JPEG, ≤1024 px); the hub decodes
 // and re-encodes them again (metadata stripped, the same bounds as the
-// describer), never stores the bytes and never fetches anything. A photo the
-// describer was refused for is left out: its label stays as it was. The owner's
-// `aiLiveImagesEnabled` switches the lane; off, the photos are ignored.
+// describer), never stores the bytes and never fetches anything. Background
+// describer refusals (Sonnet 5) do not drop photos from live Reply/Fix/Coach.
+// The owner's `aiLiveImagesEnabled` switches the lane; off, the photos are ignored.
 
 /** The features that answer the fan from the open chat: Reply, Fix and Coach. */
 export const AI_LIVE_IMAGES_FEATURES = ["fast-reply", "improve-draft", "coach-chat"] as const satisfies readonly OperationFeature[];
@@ -101,25 +101,10 @@ export async function prepareLiveImages(
   } catch {
     // The switch is read like every enrichment's: a failed read keeps the default (on).
   }
-  let refusedRefs = new Set<string>();
-  try {
-    const rows = await listAiMediaDescriptionsByRefs(app.db, {
-      pageId: input.pageId,
-      platform: input.platform,
-      mediaRefs: input.images.map((image) => image.mediaId),
-    });
-    refusedRefs = new Set(rows.filter((row) => row.status === "refused").map((row) => row.mediaRef));
-  } catch (error) {
-    app.logger.warn({ pageId: input.pageId, err: error instanceof Error ? error.name : "error" }, "ai live images: refusal lookup failed open");
-  }
   const ordered = [...input.images]
     .map((image, index) => ({ image, index, sentAtMs: Date.parse(image.sentAt) }))
     .sort((left, right) => (left.sentAtMs - right.sentAtMs) || (left.index - right.index));
   const prepared = await Promise.all(ordered.map(async ({ image, sentAtMs }) => {
-    if (refusedRefs.has(image.mediaId)) {
-      manifest.refused += 1;
-      return null;
-    }
     const result = await prepareMediaImage(Buffer.from(image.data, "base64"));
     if (!result.ok) {
       manifest.unreadable += 1;

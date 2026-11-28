@@ -127,9 +127,9 @@ old Fansly extension (fansly-chat) sends them beside its `clientContext`: its
 own transcript's `clientContext.media` labels name them, and the photos are
 drawn in the fansly.com tab from the URLs of the DM pages it already read. The
 hub (`context/live-images.ts`) decodes and re-encodes each one with the
-describer's `prepareMediaImage`, leaves out a photo the describer was refused
-for (any variant of the media id), and attaches the rest to the model call as
-base64 images after every text block. A label in the conversation names the
+describer's `prepareMediaImage` and attaches them to the model call as
+base64 images after every text block (background describer refusals do not
+drop live photos from Reply, Fix or Coach). A label in the conversation names the
 image (`[Photo #3: attached image 1]`); a photo the conversation does not show
 yet is named by its time in the lines after the conversation. The bytes are
 never stored: the restricted record keeps the hash and size,
